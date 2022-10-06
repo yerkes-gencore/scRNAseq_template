@@ -1,0 +1,239 @@
+---
+title: "scRNAseq_QC_template"
+author: "Emory Gencore"
+date: '`r format(file.info("scRNAseq_QC_template.Rmd")$ctime, "%Y-%m-%d")`'
+output: 
+  rmdformats::robobook:
+    fig_width: 8
+    gallery: true
+    thumbnails: false
+---
+
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
+
+```{r, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(reshape2)
+library(SingleR)
+library(ape)
+library(MAST)
+library(glmGamPoi)
+#library(package = affyLib, )
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE)#, include=FALSE)
+config <- yaml::yaml.load_file("scRNA_GEX_config.yml")
+source('scRNAseq_functions.R')
+# recluster <- FALSE
+# resave_combined_obj <- FALSE
+```
+
+
+# QC
+
+## Sequencing metrics
+
+```{r}
+samples <- read.table('samplesheet.txt', header=TRUE)
+qc_metrics <- capture_QC_metrics(samples)
+DT::datatable(qc_metrics, options = list(searching=FALSE, pageLength=20, lengthMenu=NULL))
+```
+
+```{r}
+a <- c("Estimated Number of Cells", "Mean Reads per Cell", "Median Genes per Cell", "Number of Reads", "Reads Mapped Confidently to Genome", "Fraction Reads in Cells", "Total Genes Detected", "Median UMI Counts per Cell")
+qc_metrics <- gsub(",", "", qc_metrics)
+qc_metrics <- gsub("%", "", qc_metrics)
+qc_metrics <- as.data.frame(qc_metrics)
+qc_metrics <- sapply(qc_metrics, as.numeric)#%>% mutate_all(function(x) as.numeric(as.character(x)))
+ggplot(melt(t(qc_metrics[rownames(qc_metrics) %in% a,])), aes(x=Var1, y=value, fill=Var1)) + geom_col()+ facet_wrap(vars(Var2 ), ncol = 4, scales='free_y') + theme_bw() + labs(x=NULL, y=NULL, fill="Sample") #+ scale_y_continuous(limits=c(0,NA))
+```
+
+
+```{r peng_data, include=FALSE}
+#, eval=!preran}
+## generate the captures, pass in parameters based on your dataset
+min.features = 200
+min.cells=10
+print(paste0('Removing cells with fewer than ', min.features, ' features.'))
+print(paste0('Removing features found in fewer than ', min.cells, ' cells.'))
+captures <- generate_captures(samples, min.cells=min.cells, min.features=min.features, mt_pattern="^mt-", rb_pattern= "^Rp[sl]")
+```
+
+## Subsetting data
+
+```{r}
+#vizualize cutoffs before applying
+qc_vln_plots(captures$`LysM-cre`, mt.cutoff=10, nfeature.cutoff.low=400, nfeature.cutoff.high = 4500)
+qc_vln_plots(captures$`Ptpn11-E76K-pos-LysM-cre`, mt.cutoff=10, nfeature.cutoff.low=400, nfeature.cutoff.high = 7000)
+
+```
+
+```{r, include=FALSE}
+#then apply
+captures$`LysM-cre` <- subset(captures$`LysM-cre`, subset = nFeature_RNA > 400 & nFeature_RNA < 4500 & percent.mito < 10)
+captures$`Ptpn11-E76K-pos-LysM-cre` <- subset(captures$`Ptpn11-E76K-pos-LysM-cre`, subset = nFeature_RNA > 400 & nFeature_RNA < 7000 & percent.mito < 10)
+```
+
+Plotting highly expressed genes. We expect to see constitutively expressed genes (e.g. mitochondrial, ribosomal, etc).
+
+```{r most_abundant_genes}
+plot_top_genes <- function(data, n=20){
+  C <- data@assays$RNA@counts
+  C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
+  most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
+  boxplot(as.matrix(t(C[most_expressed, ])), cex = 0.1, las = 1, xlab = "% total count per cell", col = (scales::hue_pal())(20)[20:1], horizontal = TRUE, main=data@project.name) 
+}
+tmp <- lapply(captures, plot_top_genes)
+```
+
+```{r}
+saveRDS(captures, "captures.Rds")
+```
+
+
+<!-- # Preprocessing  -->
+
+<!-- ## Cell cycle regression  -->
+
+<!-- ```{r} -->
+<!-- ## fix genenames -->
+<!-- m.s.genes <- str_to_title(cc.genes$s.genes) -->
+<!-- m.g2m.genes <- str_to_title(cc.genes$g2m.genes) -->
+<!-- ``` -->
+
+
+<!-- ```{r, include=FALSE} -->
+<!-- # , eval=!preran -->
+<!-- process_10X_object <- function(obj, nfeatures=3000, s.features, g2m.features){ -->
+<!--   obj <- NormalizeData(obj) -->
+<!--   obj <- FindVariableFeatures(obj, selection.method= "vst", nfeatures=nfeatures) -->
+<!--   obj <- ScaleData(obj) -->
+<!--   obj <- CellCycleScoring(obj, s.features=s.features, g2m.features = g2m.features) -->
+<!-- } -->
+<!-- captures <- lapply(captures, process_10X_object, s.features=m.s.genes, g2m.features=m.g2m.genes) -->
+<!-- ``` -->
+
+<!-- Before Regression -->
+
+<!-- ```{r} -->
+<!-- check_cc_regression <- function(data, assay){ -->
+<!--   tmp <- RunPCA(data, assay=assay, features=c(m.g2m.genes, m.s.genes), verbose=FALSE, approx=FALSE) -->
+<!-- DimPlot(tmp, group.by="Phase") + labs(title=data@project.name) -->
+<!-- } -->
+<!-- lapply(captures, check_cc_regression, assay='RNA') -->
+<!-- ``` -->
+
+
+<!-- ## Normalization, scaling, and regressing confounding factors -->
+
+<!-- ```{r, include=FALSE} -->
+<!-- captures <- lapply(captures, SCTransform, vars.to.regress=c('percent.mito', 'S.Score', 'G2M.Score'), verbose=FALSE) # method='glmGamPoi', -->
+<!-- ``` -->
+
+<!-- After regression -->
+
+<!-- ```{r} -->
+<!-- lapply(captures, check_cc_regression, assay='SCT') -->
+<!-- ``` -->
+
+<!-- ## Reference mapping -->
+
+<!-- ```{r reference_data, include=FALSE,} -->
+<!-- # eval=!preran -->
+<!-- seurat_map <- function(obj, ref, normalization.method = "SCT", -->
+<!--                        reference.reduction="pca", -->
+<!--                        refdata = list(cell_ontolog_class = "cell_ontology_class"), -->
+<!--                        ndims=20){ -->
+<!--   anchors <- FindTransferAnchors( -->
+<!--     reference = ref, -->
+<!--     query = obj, -->
+<!--     normalization.method = normalization.method, -->
+<!--     reference.reduction = reference.reduction, -->
+<!--     dims = 1:ndims -->
+<!--   ) -->
+<!--   obj <- MapQuery( -->
+<!--     anchorset = anchors, -->
+<!--     query = obj, -->
+<!--     reference = ref, -->
+<!--     refdata = refdata -->
+<!--   ) -->
+<!--   obj -->
+<!-- } -->
+<!-- load('/Users/dgratz/Downloads/droplet_Spleen_seurat_tiss.Robj') -->
+<!-- tiss <- UpdateSeuratObject(tiss) -->
+<!-- tiss <- SCTransform(tiss, verbose=FALSE) -->
+<!-- captures <- lapply(captures, seurat_map, ref=tiss) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- mapping_results_func <- function(data){ -->
+<!--   a <- melt(table(data@meta.data$predicted.cell_ontolog_class)) -->
+<!--   colnames(a) <- c("Predicted Cells", data@project.name) -->
+<!--   a -->
+<!-- } -->
+<!-- mapping_results <- lapply(captures, mapping_results_func) %>% purrr::reduce(full_join, by='Predicted Cells') -->
+<!-- DT::datatable(mapping_results) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+
+<!-- plot_mapping_results <- function(data){ -->
+<!--   ggplot(data@meta.data, aes(x=predicted.cell_ontolog_class, y=predicted.cell_ontolog_class.score)) + geom_boxplot() + theme_minimal() + labs(x="Predicted celltype", y="Prediction score", caption="Higher prediction score is more confident", title=data@project.name) + geom_jitter(alpha=0.1) -->
+
+<!-- } -->
+<!-- lapply( captures, plot_mapping_results) -->
+<!-- ``` -->
+
+
+
+<!-- ```{r genes_to_exclude, include=FALSE, eval=FALSE} -->
+<!-- #  -->
+<!-- # GFF <- read.gff(file.path(config$rootDir, "/Genome_references/mus_musculus/GRCm38/ensembl_102/Mus_musculus.GRCm38.102.gtf")) -->
+<!-- #  -->
+<!-- #  -->
+<!-- # GFF$gene_biotype <- unlist(lapply(GFF$attributes, extract_attributes, "gene_biotype")) -->
+<!-- # GFF$name <- unlist(lapply(GFF$attributes, extract_attributes, "name")) -->
+<!-- # coding.genes <- unique(GFF %>% filter(gene_biotype=="protein_coding") %>% select(name)) -->
+<!-- # ig.genes <- unique(GFF %>% filter(grepl("IG_", gene_biotype)) %>% select(name)) -->
+<!-- # tr.genes <- unique(GFF %>% filter(grepl("TR_", gene_biotype)) %>% select(name)) -->
+<!-- # mt.genes <- unique(GFF %>% filter(grepl("mt-", name)) %>% select(name)) -->
+<!-- # #genes <- convertMouseGeneList(humGenes) -->
+
+<!-- ``` -->
+
+<!-- ## Integration -->
+
+<!-- ```{r, include=FALSE} -->
+<!-- #sc.list <- SplitObject(sc, split.by='orig.ident') -->
+<!-- #captures <- lapply(captures, FindVariableFeatures) -->
+<!-- features <- SelectIntegrationFeatures(captures, nfeatures = 3000) -->
+<!-- captures <- PrepSCTIntegration(captures, anchor.features = features) -->
+<!-- anchors <- FindIntegrationAnchors(object.list = captures, normalization.method = "SCT", -->
+<!--     anchor.features = features) -->
+<!-- combined.sct <- IntegrateData(anchorset = anchors, normalization.method = "SCT") -->
+
+
+<!-- # if (length(captures) > 1){ -->
+<!-- #   merged_obj <- merge(captures[[1]], unlist(captures[-1]), add.cell.ids=samples$Label) -->
+<!-- # } else { -->
+<!-- #   merged_obj <- captures[1] -->
+<!-- # } -->
+
+<!-- saveRDS(object = combined.sct, file="combinedsct.rds") -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- integration_pca <- RunPCA(combined.sct, assay='integrated', verbose=FALSE) -->
+<!-- integration_pca <- DimPlot(integration_pca, group.by='orig.ident', ) -->
+<!-- integration_pca[[1]]$layers[[1]]$aes_params$alpha = .2 -->
+<!-- integration_pca + labs(title="", caption="Captures should not be clustering separately") -->
+<!-- ``` -->
+
+
