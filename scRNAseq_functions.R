@@ -132,4 +132,11 @@ plot_top_genes <- function(data, n=20){
   boxplot(as.matrix(t(C[most_expressed, ])), cex = 0.1, las = 1, xlab = "% total count per cell", col = (scales::hue_pal())(20)[20:1], horizontal = TRUE, main=data@project.name) 
 }
 
+qc_plots_hash <- function(cap){
+  plot1 <- FeatureScatter(cap, feature1 = "nCount_RNA", feature2 = "percent.mito", group.by = "HTO_classification.global")  +
+    theme(legend.position="none") + ggtitle(cap@project.name)
+  plot2 <- FeatureScatter(cap, feature1 = "nCount_RNA", feature2 = "nFeature_RNA", group.by = "HTO_classification.global") +   ggtitle(cap@project.name)
+  plot1 + plot2 
+}
+
 

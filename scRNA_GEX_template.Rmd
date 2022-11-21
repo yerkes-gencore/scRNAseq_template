@@ -1,12 +1,15 @@
 ---
-title: "scRNA_GEX_template"
+title: 'p22091_Peng_analysis'
 author: "Emory Gencore"
-date: '`r format(Sys.time(), "%Y-%m-%d")`'
-output: html_notebook
-  # rmdformats::robobook:
-  #   fig_width: 9
+date: '`r Sys.Date()`'
+output: 
+  rmdformats::robobook:
+    fig_width: 8
+    gallery: true
+    thumbnails: false
+    toc_depth: 1
 ---
-
+    
 <style type="text/css">
 .book .book-body .page-inner {
   max-width: 1600px;
@@ -15,83 +18,42 @@ output: html_notebook
 }
 </style>
 
+
 ```{r, include=FALSE}
 library(Seurat)
 library(tidyverse)
 library(reshape2)
 library(SingleR)
-library(biomaRt)
-library(fgsea)
-library(org.Mm.eg.db)
-library(clusterProfiler)
 library(ape)
 library(MAST)
+library(glmGamPoi)
+library(kableExtra)
+library(SoupX)
+library(gridExtra)
+library(DoubletFinder)
+#library(SC3)
+library(rngtools)
+library(ggrepel)
+library(DT)
+library(clustree)
 #library(package = affyLib, )
-knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, cache=TRUE, cache.lazy=FALSE)
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE, cache.lazy = FALSE, fig.width = 5, fig.height = 5)#, include=FALSE)
 config <- yaml::yaml.load_file("scRNA_GEX_config.yml")
 source('scRNAseq_functions.R')
-#preran <- TRUE
-#recluster <- FALSE
-#resave_combined_obj <- FALSE
-simplified <- FALSE
+# recluster <- FALSE
+# resave_combined_obj <- FALSE
+preran=TRUE
 ```
+
 
 ```{r}
-captures <- readRDS('captures.Rds')
+combined.obj <- readRDS('saved_rds/combined_obj.Rds')
 ```
 
+# Reference based cell-type identification
 
-# Preprocessing 
-<!-- {.tabset} -->
-<!-- ## Cell cycle regression  -->
-
-```{r}
-## fix genenames
-m.s.genes <- str_to_title(cc.genes$s.genes)
-m.g2m.genes <- str_to_title(cc.genes$g2m.genes)
-```
-
-
-```{r, include=FALSE}
-# , eval=!preran
-process_10X_object <- function(obj, nfeatures=3000, s.features, g2m.features){
-  obj <- NormalizeData(obj)
-  obj <- FindVariableFeatures(obj, selection.method= "vst", nfeatures=nfeatures)
-  obj <- ScaleData(obj)
-  obj <- CellCycleScoring(obj, s.features=s.features, g2m.features = g2m.features)
-}
-captures <- lapply(captures, process_10X_object, s.features=m.s.genes, g2m.features=m.g2m.genes)
-```
-
-<!-- Before Regression -->
-
-```{r, results='hide', fig.keep='all', include=!simplified}
-check_cc_regression <- function(data, assay){
-  tmp <- RunPCA(data, assay=assay, features=c(m.g2m.genes, m.s.genes), verbose=FALSE, approx=FALSE)
-DimPlot(tmp, group.by="Phase") + labs(title=data@project.name)
-}
-lapply(captures, check_cc_regression, assay='RNA')
-```
-
-
-<!-- ## Normalization, scaling, and regressing confounding factors -->
-
-```{r, include=FALSE, cache.lazy=FALSE}
-captures <- lapply(captures, SCTransform, vars.to.regress=c('percent.mito', 'S.Score', 'G2M.Score')) # method='glmGamPoi',
-```
-
-<!-- After regression -->
-
-```{r, results='hide', fig.keep='all', include=!simplified}
-lapply(captures, check_cc_regression, assay='SCT')
-```
-
-## Reference mapping 
-<!-- {.active}  -->
-Predicting cell types using data from the [Tabula Muris](https://tabula-muris.ds.czbiohub.org/) dataset
-
-```{r reference_data, include=FALSE,}
-# eval=!preran
+```{r reference_data, include=FALSE}
+# eval=!preran 
 seurat_map <- function(obj, ref, normalization.method = "SCT",
                        reference.reduction="pca",
                        refdata = list(cell_ontolog_class = "cell_ontology_class"),
@@ -111,391 +73,386 @@ seurat_map <- function(obj, ref, normalization.method = "SCT",
   )
   obj
 }
-load('/Users/dgratz/Downloads/droplet_Spleen_seurat_tiss.Robj')
+## Load reference object
+load('droplet_Spleen_seurat_tiss.Robj')
 tiss <- UpdateSeuratObject(tiss)
 tiss <- SCTransform(tiss, verbose=FALSE)
-captures <- lapply(captures, seurat_map, ref=tiss)
+combined.obj <- seurat_map(combined.obj, ref=tiss)
 
 ```
 
 ```{r}
-mapping_results_func <- function(data){
-  a <- melt(table(data@meta.data$predicted.cell_ontolog_class))
-  colnames(a) <- c("Predicted Cells", data@project.name)
-  a
-}
-mapping_results <- lapply(captures, mapping_results_func) %>% purrr::reduce(full_join, by='Predicted Cells')
+mapping_results <- table(combined.obj@meta.data$predicted.cell_ontolog_class, combined.obj@meta.data$orig.ident)
 knitr::kable(mapping_results)
 ```
-
 
 ```{r, results='hide', fig.keep='all'}
 
 plot_mapping_results <- function(data){
-  ggplot(data@meta.data, aes(x=predicted.cell_ontolog_class, y=predicted.cell_ontolog_class.score)) + geom_boxplot() + theme_minimal() + labs(x="Predicted celltype", y="Prediction score", caption="Higher prediction score is more confident", title=data@project.name) + geom_jitter(alpha=0.1)
+  ggplot(data@meta.data, aes(x=predicted.cell_ontolog_class, y=predicted.cell_ontolog_class.score)) + geom_boxplot() + theme_minimal() + labs(x="Predicted celltype", y="Prediction score", caption="Higher prediction score is more confident") + geom_jitter(alpha=0.1)
   
 }
-lapply( captures, plot_mapping_results)
+plot_mapping_results(combined.obj)
+```
+
+```{r}
+DefaultAssay(combined.obj) <- 'RNA'
 ```
 
 
 
-```{r genes_to_exclude, include=FALSE, eval=FALSE}
-# 
-# GFF <- read.gff(file.path(config$rootDir, "/Genome_references/mus_musculus/GRCm38/ensembl_102/Mus_musculus.GRCm38.102.gtf"))
-# 
-# 
-# GFF$gene_biotype <- unlist(lapply(GFF$attributes, extract_attributes, "gene_biotype"))
-# GFF$name <- unlist(lapply(GFF$attributes, extract_attributes, "name"))
-# coding.genes <- unique(GFF %>% filter(gene_biotype=="protein_coding") %>% select(name))
-# ig.genes <- unique(GFF %>% filter(grepl("IG_", gene_biotype)) %>% select(name))
-# tr.genes <- unique(GFF %>% filter(grepl("TR_", gene_biotype)) %>% select(name))
-# mt.genes <- unique(GFF %>% filter(grepl("mt-", name)) %>% select(name))
-# #genes <- convertMouseGeneList(humGenes)
+<!-- # Cross-capture conserved cluster markers -->
+# Removing unwanted celltypes
 
-```
+Celltype removal is based on clustering and marker gene identification, not reference mapping
 
-<!-- ## Integration -->
+```{r, include=FALSE, eval=FALSE}
+if (preran) {
+  #clusters.markers <- readRDS('saved_rds/clusters_markers.Rds')
+  conserved_markers_pos <- readRDS('saved_rds/conserved_markers.Rds')
+} else {
+  #clusters.markers <- FindAllMarkers(combined.obj, min.pct = 0.25, logfc.threshold = log2(1.5), assay = 'RNA')
+  # conserved_markers <- lapply(levels(combined.obj$seurat_clusters), function(x) {
+  #   a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
+  #                             logfc.threshold = log2(1.5), min.pct = 0.25)
+  #   a$cluster <- x
+  #   return(a %>% rownames_to_column('Gene'))
+  # })
+  conserved_markers_pos <- lapply(levels(combined.obj$seurat_clusters), function(x) {
+    a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
+                              logfc.threshold = log2(1.5), min.pct = 0.25, only.pos = TRUE)
+    a$cluster <- x
+    return(a %>% rownames_to_column('Gene'))
+  })
+  #conserved_markers <- bind_rows(conserved_markers)
+  conserved_markers_pos <- bind_rows(conserved_markers_pos)
+  #saveRDS(clusters.markers, "saved_rds/clusters_markers.Rds")
+  saveRDS(conserved_markers_pos, "saved_rds/conserved_markers_pos.Rds")
+}
 
-```{r, include=FALSE}
-#sc.list <- SplitObject(sc, split.by='orig.ident')
-#captures <- lapply(captures, FindVariableFeatures)
-features <- SelectIntegrationFeatures(captures, nfeatures = 3000)
-captures <- PrepSCTIntegration(captures, anchor.features = features)
-anchors <- FindIntegrationAnchors(object.list = captures, normalization.method = "SCT",
-    anchor.features = features)
-combined.sct <- IntegrateData(anchorset = anchors, normalization.method = "SCT")
 
 
-# if (length(captures) > 1){
-#   merged_obj <- merge(captures[[1]], unlist(captures[-1]), add.cell.ids=samples$Label)
-# } else {
-#   merged_obj <- captures[1]
+# for (i in 0:(length(conserved_markers)-1)){
+#   conserved_markers[[i+1]]$cluster <- i
+#   conserved_markers[[i+1]] <- conserved_markers[[i+1]] %>% rownames_to_column('Gene')
 # }
 
-saveRDS(object = combined.sct, file="combinedsct.rds")
 ```
 
-```{r, include=!simplified}
-integration_pca <- RunPCA(combined.sct, assay='integrated', verbose=FALSE)
-integration_pca <- DimPlot(integration_pca, group.by='orig.ident', )
-integration_pca[[1]]$layers[[1]]$aes_params$alpha = .2
-integration_pca + labs(title="", caption="Captures should not be clustering separately")
+```{r, include=FALSE, eval=FALSE}
+tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
+tmp <- 100*tmp/rowSums(tmp)
+#tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
+knitr::kable(tmp, caption = 'Percentage of cluster from each capture', digits = 1)
 ```
 
-
-***
-
-<!-- # Dimensional reduction {.tabset} -->
-
-<!-- ## Determining PCs -->
-
-<!-- The number of principle components selected influences the final clustering. We try to select the subset of PCs that captures the most variability in the data without over-parameterizing  -->
-
-```{r, include=!simplified}
-combined.sct <- RunPCA(combined.sct)
-ElbowPlot(combined.sct, ndims=30)
-```
-
-```{r, include=!simplified, fig.width=12, fig.height=24}
-DimHeatmap(combined.sct, dims = 1:30, cells = 500, balanced = TRUE)
-```
-
-```{r, include=!simplified}
-pcs <- 21
-print(paste0("Using ", pcs, " PCs"))
-combined.sct <- FindNeighbors(combined.sct, dims=1:pcs, verbose=FALSE)
-combined.sct <- RunUMAP(combined.sct, reduction='pca', dims = 1:pcs)
-```
-
-<!-- # -->
-# Mapping metadata 
-<!-- {.active} -->
-Overlaying some metadata on the UMAP. Predicted cell ontology is based on a reference dataset for mouse spleen. The score of the predicted class indicates the strength of the call, higher being better. Cell phase is predicted by cell cycle marker genes, but is not specific to mouse or spleen cells.
-
-```{r, include=!simplified}
-DimPlot(combined.sct, group.by = "orig.ident") + ggtitle("Capture")
-
-```
-
-```{r}
-DimPlot(combined.sct, group.by = "predicted.cell_ontolog_class") + ggtitle("Predicted cell ontology class")
-```
-
-```{r}
-FeaturePlot(combined.sct, reduction='umap', features="predicted.cell_ontolog_class.score") + ggtitle("Class prediction score")
-```
-
-
-```{r}
-DimPlot(combined.sct, group.by = "Phase") + ggtitle("Cell cycle phase")
-```
-
-```{r}
-FeaturePlot(combined.sct, reduction='umap', features="nFeature_RNA") + ggtitle("Unique features count")#, group.by='orig.ident')
-```
-
-```{r}
-FeaturePlot(combined.sct, reduction='umap', features="nCount_RNA") + ggtitle("Total RNA count")
-```
-
-```{r}
-FeaturePlot(combined.sct, reduction='umap', features="percent.mito") + ggtitle("Mitochondrial feature percentage")
-```
-
-```{r}
-#https://www.miltenyibiotec.com/US-en/resources/macs-handbook/mouse-cells-and-organs/mouse-cell-sources/spleen-mouse.html
-miltenyi_markers <- list(T.cells=c('Thy1', 'Cd3e', 'Cd4', 'Cd8a'),B.cells=c('Cd19','Ptprc'), Monocytes=c('Itgam', 'Csf1r', 'Ccr2', 'Ly6c1'), Granulocytes=c('Itgam', 'Ly6c1', 'SiglecF', 'Itga2', 'Ccr3'), Dentritic=c('Itgax', 'H2', 'Xcr1'), Natural.Killer=c('Ncr1','Klrb1c'), Macrophages=c('Adgre1'))
-```
-
-<!-- ## Mapping markers -->
-
-<!-- Exploring some mouse spleen cell subtype markers from [Miltenyi Biotec](https://www.miltenyibiotec.com/US-en/resources/macs-handbook/mouse-cells-and-organs/mouse-cell-sources/spleen-mouse.html) -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$T.cells) + labs(caption="T cell markers") -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$B.cells) + labs(caption="B cell markers") -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$Dentritic) + labs(caption="Dentritic markers") -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$Granulocytes) + labs(caption="Granulocytes markers") -->
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$Monocytes) + labs(caption="Monocytes markers") -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$Natural.Killer) + labs(caption="Natural Killer markers") -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-<!-- FeaturePlot(combined.sct, features=miltenyi_markers$Macrophages) + labs(caption="Macrophages markers") -->
-<!-- ``` -->
-
-<!-- ```{r cluster_dotlot, eval=FALSE} -->
-<!-- DotPlot(combined.sct, features=unique(unlist(miltenyi_markers)), group.by='predicted.cell_ontolog_class')+ theme(axis.text.x = element_text(angle = 45, hjust=1)) -->
-<!-- ``` -->
-
-# Clustering {.tabset}
-
-## Evaluating resolution
-
-The resolution decides how granular the clusters are. At a high resolution, cells within a visually distinct cluster may be further broken down based on some expression differences. However, this distinction can become arbitrary and not relevant to the study. We aim to select a resolution that separates biologically relevant and study specific subclusters. To do this, we are looking for relevent biological process Gene Ontology pathways that are enriched with the subset of significant markers that distinguish clusters.
-
-```{r, results='hide', fig.keep='all'}
-res <- c(0.3,0.325,0.35)
-combined.sct <- FindClusters(combined.sct, resolution = res, verbose=FALSE)
-resplots <- function(res, x){
-  DimPlot(x, reduction='umap', label=TRUE, group.by = paste0("integrated_snn_res.", res))
-}
-lapply(res, resplots, x=combined.sct)
-```
-
-At resolution 0.325, newly distinguished clusters 16 and 17 appear to have cluster markers relating to immune cells
-
-```{r}
-tmp <- comp_clusters('0.325', 17, 16) 
-knitr::kable(head(tmp$table %>% mutate_if(is.numeric, round, 3), 20), rownames=FALSE)
-#data.table::data.table(head(tmp$table ),10)
-```
-
-When examining the 0.35 resolution, the gene ontology of top markers distinguishing the subtle new clusters 1 and 17 did not seem to help determine cell subtypes. 
-
-```{r}
-tmp <- comp_clusters('0.35', 17, 1) 
-knitr::kable(head(tmp$table %>% mutate_if(is.numeric, round, 3), 20), rownames=FALSE)
-#data.table::data.table(head(tmp$table ), 10)
-```
-
-
-
-
-We then decide to use a resolution of 0.325 as it seems to encapsulate the relevant clusterings.  
-
-```{r, results='hide'}
-resolution <- 0.325
-print(paste0("Using resolution of ", resolution))
-combined.sct <- FindClusters(combined.sct, resolution = resolution)
-Idents(combined.sct) <- paste0("integrated_snn_res.",resolution)
-a <- paste0("integrated_snn_res.",resolution)
-combined.sct$seurat_clusters <- combined.sct[[a]]
-
-```
-
-## Clustering results {.active}
-
-```{r cluster_dimplot}
-DimPlot(combined.sct, reduction='umap', label = TRUE)#, group.by='orig.ident') + DimPlot(combined.sct, reduction='umap', group.by='predicted.cell_ontology_class')
-```
-
-```{r}
-saveRDS(combined.sct, "combinedsct.Rds")
-```
-
-***
-
-# DGE
-
-Differential gene expression between clusters. We compare cells within a cluster to all other clusters to determine the "cluster markers": genes that cause a cluster to separate from other clusters. This calculation considers expression variability and detection variability to determine significance. 
-
-```{r find_all_markers}
-clusters.markers <- FindAllMarkers(combined.sct, min.pct = 0.25, logfc.threshold = log2(1.5))
-saveRDS(clusters.markers, "clusters_markers.Rds")
-## find all markers distinguishing cluster 5 from clusters 0 and 3
-#cluster5.markers <- FindMarkers(combined.sct, ident.1 = 1, ident.2= 2, min.pct = 0.25)
-#head(cluster5.markers, n = 5)
-#data.table::data.table(cluster5.markers)
-```
-
-```{r save_markers}
-#clusters.markers <- readRDS("clusters_markers.Rds")
-```
-
-```{r featureplot_top_markers, fig.width=10, fig.height=12}
-topmarkers <- clusters.markers %>%
+```{r , fig.height=16, fig.width=16, include=FALSE, eval=FALSE}
+conserved_markers_pos$avg_log2FC <- (conserved_markers_pos %>% select(contains('log2FC')) %>% transmute(avg_log2FC=rowMeans(.)))$avg_log2FC
+top10 <- conserved_markers_pos %>%
     group_by(cluster) %>%
-    top_n(n = 1, wt = avg_log2FC)
-#FeaturePlot(combined.sct, features=topmarkers$gene)
+    top_n(n = 5, wt = abs(avg_log2FC))
+DoHeatmap(combined.obj, features = top10$Gene)
 ```
+
+```{r, include = FALSE, eval = FALSE}
+datatable(conserved_markers %>% mutate_if(is.numeric, ~round(., 2)) %>% filter(max_pval<0.05) %>% dplyr::select(cluster, Gene, avg_log2FC, max_pval, `LysM-cre_pct.1`, `LysM-cre_pct.2`, `Ptpn11-E76K-pos-LysM-cre_pct.1`, `Ptpn11-E76K-pos-LysM-cre_pct.2`), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold-change across conditions in cluster", "Max Adj. p val", "% detected in\nLysm-cre in cluster", "% detected in Lysm-cre noutside cluster", 
+                            "% detected in Ptpn11-E76K-pos in cluster", "% detected in Ptpn11-E76K-pos outside cluster"              ))
+```
+
+<!-- Genes plotted here were pulled from top conserved markers as well as genes used in Peng's previous inquiry -->
+
+```{r, fig.width=6}
+markers <- read.csv('markers.txt', header=TRUE)
+for (celltype in c('B cells', 'Plasma cells')){
+  genes <- markers %>% filter(Celltype==celltype)
+  a <- DotPlot(combined.obj, features=genes$Gene, assay='RNA', col.max = 50) + ggtitle(celltype)#, col.min = 0, col.max = 5) #+ ggtitle(celltype) #+ theme(axis.text.x = element_text(angle = 45, hjust=1))
+  print(a)
+}
+#DotPlot(combined.obj, features=markers$Gene)+ theme(axis.text.x = element_text(angle = 45, hjust=1))
+```
+
+<!-- # Cluster labels -->
+
+<!-- Final clusters with some manually provided labels. These do not represent any definitive statement about members of the cluster, but represent a non-expert manual approximation based on the metadata and markers. The previous sections shows genes defining clusters and metadata which may allow a mouse spleen expert to better characterize these groupings.  -->
+
+```{r , fig.width=10, fig.height=10}
+cluster_tags <- c(
+  "0",#. Cd8a+ T cells",    #0
+  "1",#. Ly6c1+ Cd4+ T cells",
+  "2",#. Cd4+ T cells",
+  "3",#. Cd8a+ T cells",
+  "4",#. Neutrophils",    
+  "5",#. Monocytes/Macrophages",               #5
+  "6",#. Neutrophils",
+  "7",#. Basophil or Erythroid",
+  "8",#. DC (Myeloid?)",
+  "9",#. Plasmatoid DC?",          
+  "10",#. Neutrophil/Eosinophil?",                   #10
+  "11",#. NK cells",
+  "12",#. Monocytes",
+  "13",#. DC",
+  "14. Plasma cells",
+  "15. B cells"        #15
+  )
+combined.obj$labels <- "NA"
+combined.obj$labels <- plyr::mapvalues(combined.obj$seurat_clusters, 
+                                       from=0:15, to=cluster_tags)
+DimPlot(combined.obj, group.by = "labels", label = TRUE, label.box=TRUE, repel=TRUE, cells.highlight = colnames(subset(combined.obj, subset = seurat_clusters %in% c('14', '15')))) + theme(legend.position="none") + ggtitle("Unwanted clusters")
+```
+
+```{r}
+combined.obj.full <- combined.obj
+combined.obj.removed <- subset(combined.obj, subset = seurat_clusters %in% c(14, 15), invert=FALSE)
+combined.obj <- subset(combined.obj, subset = seurat_clusters %in% c(14, 15), invert=TRUE)
+
+```
+
+```{r, include=FALSE}
+DefaultAssay(combined.obj) <- 'integrated'
+combined.obj <- RunPCA(combined.obj)
+ElbowPlot(combined.obj, ndims = 30)
+```
+
+```{r, include=FALSE}
+npcs = 12
+combined.obj <- FindNeighbors(combined.obj, dims=1:npcs, verbose=FALSE)
+combined.obj <- RunUMAP(combined.obj, reduction='pca', dims=1:npcs)
+```
+
+```{r, fig.width=12, fig.height=6, include = FALSE}
+testclustree <- FindClusters(combined.obj, resolution = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7), verbose=FALSE)
+clustree(testclustree) +
+    guides(edge_colour = FALSE) + theme(legend.position = "top")
+```
+
+```{r}
+res = 0.3
+
+combined.obj <- FindClusters(combined.obj, resolution = res, verbose=FALSE)
+DefaultAssay(combined.obj) <- 'RNA'
+combined.obj <- NormalizeData(combined.obj)
+combined.obj <- FindVariableFeatures(combined.obj)
+combined.obj <- ScaleData(combined.obj)
+```
+
+# Metadata 
+
+## Cluster membership {.tabset}
+How much of each capture is in each cluster
+
+```{r}
+tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
+knitr::kable(tmp, caption = 'Number of cells per cluster')
+tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
+knitr::kable(tmp, caption = '% of total capture per cluster', digits = 1)
+tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
+tmp <- 100*tmp/rowSums(tmp)
+#tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
+knitr::kable(tmp, caption = '% of cluster belonging to each capture', digits = 1)
+```
+
+
+## Mapping features
+
+```{r, fig.width=8}
+DimPlot(combined.obj, split.by = "orig.ident") + ggtitle("Capture")
+```
+
+```{r, fig.width = 8, fig.height = 4}
+p1 <- DimPlot(combined.obj, group.by = "predicted.cell_ontolog_class") + ggtitle("Predicted cell ontology class")
+p2 <- FeaturePlot(combined.obj, reduction='umap', features="predicted.cell_ontolog_class.score") + ggtitle("Class prediction score")
+p1 + p2
+```
+
+Cell cycle is predicted using human cell cycle markers mapped to mouse genes, so they may not be the most accurate for mouse cells
+
+```{r}
+DimPlot(combined.obj, group.by = "Phase") + ggtitle("Cell cycle phase")
+```
+
+```{r, fig.width = 8, fig.height = 8}
+FeaturePlot(combined.obj, reduction='umap', features=c('nCount_RNA', "nFeature_RNA", "percent.mito", "percent.ribo"))
+```
+
+# Cluster labeling
+
+```{r, include=FALSE, eval=TRUE}
+if (preran) {
+  #clusters.markers <- readRDS('saved_rds/clusters_markers.Rds')
+  conserved_markers_pos <- readRDS('saved_rds/conserved_markers_pos.Rds')
+} else {
+  #clusters.markers <- FindAllMarkers(combined.obj, min.pct = 0.25, logfc.threshold = log2(1.5), assay = 'RNA')
+  # conserved_markers <- lapply(levels(combined.obj$seurat_clusters), function(x) {
+  #   a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
+  #                             logfc.threshold = log2(1.5), min.pct = 0.25)
+  #   a$cluster <- x
+  #   return(a %>% rownames_to_column('Gene'))
+  # })
+  conserved_markers_pos <- lapply(levels(combined.obj$seurat_clusters), function(x) {
+    a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
+                              logfc.threshold = log2(1.5), min.pct = 0.25, only.pos = TRUE)
+    a$cluster <- x
+    return(a %>% rownames_to_column('Gene'))
+  })
+  #conserved_markers <- bind_rows(conserved_markers)
+  conserved_markers_pos <- bind_rows(conserved_markers_pos)
+  #saveRDS(clusters.markers, "saved_rds/clusters_markers.Rds")
+  saveRDS(conserved_markers_pos, "saved_rds/conserved_markers_pos.Rds")
+}
+
+
+
+# for (i in 0:(length(conserved_markers)-1)){
+#   conserved_markers[[i+1]]$cluster <- i
+#   conserved_markers[[i+1]] <- conserved_markers[[i+1]] %>% rownames_to_column('Gene')
+# }
+
+```
+
+
 
 Heatmap of the top 5 gene identifiers for each cluster.
 
-```{r heatmap_top_markers, fig.height=16, fig.width=16}
-clusters.markers %>%
+```{r, fig.height=16, fig.width=16}
+conserved_markers_pos$avg_log2FC <- (conserved_markers_pos %>% select(contains('log2FC')) %>% transmute(avg_log2FC=rowMeans(.)))$avg_log2FC
+top10 <- conserved_markers_pos %>%
     group_by(cluster) %>%
-    top_n(n = 5, wt = avg_log2FC) -> top10
-DoHeatmap(combined.sct, features = top10$gene)
+    top_n(n = 5, wt = abs(avg_log2FC))
+DoHeatmap(combined.obj, features = top10$Gene)
 ```
 
-Table of all markers for all clusters. 
-
-```{r datatable_markers}
-# DT::datatable(clusters.markers %>% mutate_if(is.numeric, ~round(., 4) %>% select(cluster, gene, avg_log2FC, p_val, p_val_adj, pct.1, pct.2)), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold change", "P value", "Adj. p val", "% cluster", "% outside cluster"))
-datatable(clusters.markers %>% mutate_if(is.numeric, ~round(., 4)) %>% filter(p_val_adj<0.05) %>% dplyr::select(cluster, gene, avg_log2FC, p_val_adj, pct.1, pct.2), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2\nfold change", "Adj. p val", "% detected\nin cluster", "% detected\noutside cluster"))
+```{r}
+datatable(conserved_markers_pos %>% mutate_if(is.numeric, ~round(., 2)) %>% filter(max_pval<0.05) %>% dplyr::select(cluster, Gene, avg_log2FC, max_pval, `LysM-cre_pct.1`, `LysM-cre_pct.2`, `Ptpn11-E76K-pos-LysM-cre_pct.1`, `Ptpn11-E76K-pos-LysM-cre_pct.2`), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold-change across conditions in cluster", "Max Adj. p val", "% detected in\nLysm-cre in cluster", "% detected in Lysm-cre noutside cluster", 
+                            "% detected in Ptpn11-E76K-pos in cluster", "% detected in Ptpn11-E76K-pos outside cluster"              ))
 ```
 
-***
+Expression in dotplots is scaled
 
-# Cluster Identification
+```{r, fig.width=6}
+markers <- read.csv('markers.txt', header=TRUE)
 
-Some mouse immune / spleen cell markers were found [here](https://www.cellsignal.com/pathways/immune-cell-markers-mouse) and [here](https://www.miltenyibiotec.com/US-en/resources/macs-handbook/mouse-cells-and-organs/mouse-cell-sources/spleen-mouse.html#gref) that were used for an initial pass at identifying cell types. 
-
-```{r, fig.width=19, fig.height=8}
-## https://www.cellsignal.com/pathways/immune-cell-markers-mouse
-## https://www.miltenyibiotec.com/US-en/resources/macs-handbook/mouse-cells-and-organs/mouse-cell-sources/spleen-mouse.html#gref
-markers <- c(
-'Cd19',
-'Cd27',
-'Ighd',
-'Ptprc',
-'Cd3e',
-'Cd4',
-'Il7r',
-'Cd69',
-'Cd44',
-'Sell',
-'Cd8a',
-'Pdcd1',
-'Thy1',
-'Tbx21',
-'Il2ra',
-'Havcr2',
-'Lag3',
-'Klrk1',
-'Klrb1c',
-'Ncr1',
-'Cd83',
-'Bst2',
-'Xcr1',
-'Itgax',
-'Clec9a',
-'Itgam',
-'Ccr2',
-'Ly6c1',
-'Csf1r',
-'Cd14',
-'Cd86',
-'Cd80',
-'Cd163',
-'Mrc1',
-'Adgre1',
-'Ly6g',
-'Kit',
-'Itga2',
-'Ccr3'
-)
-celltypes <- c(
-  rep(rep("B cells", 5),18),
-  rep(rep("T cells", 11),18),
-  rep(rep("NK cells", 3),18),
-  rep(rep("Dendritic", 5),18),
-  rep(rep("Monocytes", 4),18),
-  rep(rep("Macrophages", 5),18),
-  rep(rep("Neutrophils", 2),18),
-  rep(rep("Granulocytes", 3),18)
-)
-library(grid)
-DotPlot(combined.sct, features=markers, group.by=paste0("integrated_snn_res.",resolution))+ theme(axis.text.x = element_text(angle = 45, hjust=1)) +
-  #annotation_custom(rectGrob(),xmin=1,xmax=5,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("B cells", gp=gpar(fill='Black')), xmin=1,xmax=4,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=6,xmax=11,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("T cells", gp=gpar(fill='Black')), xmin=5,xmax=17,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=12,xmax=15,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("NKC", gp=gpar(fill='Black')), xmin=18, xmax=20,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=16,xmax=21,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("Dendritic", gp=gpar(fill='Black')), xmin=21,xmax=25,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=22,xmax=26,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("Monocytes", gp=gpar(fill='Black')), xmin=26,xmax=29,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=27,xmax=32,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("Macrophages", gp=gpar(fill='Black')), xmin=30,xmax=34,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=33,xmax=35,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("Neutrophils", gp=gpar(fill='Black')), xmin=35,xmax=36,ymin=-1, ymax=-1) +
-  #annotation_custom(rectGrob(),xmin=36,xmax=38,ymin=-1.25, ymax=-.75) + 
-  annotation_custom(textGrob("Granulocytes", gp=gpar(fill='Black')), xmin=37,xmax=39,ymin=-1, ymax=-1) + geom_vline(aes(xintercept=4.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=17.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=20.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=25.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=29.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=34.5), alpha=0.5, lty='dashed') +
-  geom_vline(aes(xintercept=36.5), alpha=0.5, lty='dashed') +
-  coord_cartesian(clip='off') + labs(x="", y=NULL, caption="Genes listed are not necessarily upregulated in these celltypes, but the expression (or absence thereof) may be useful to identify celltypes.")
+markers[] <- lapply(markers, str_trim)
+markers <- markers %>% filter(!Celltype %in% c('B cells', 'Plasma cells'))
+for (celltype in unique(markers$Celltype)){
+  genes <- markers %>% filter(Celltype==celltype)
+  a <- DotPlot(combined.obj, features=genes$Gene, assay='RNA', col.max = 50) + theme(axis.text.x = element_text(angle = 45, hjust=1))+ ggtitle(celltype)#, col.min = 0, col.max = 5) #+ ggtitle(celltype) #+ theme(axis.text.x = element_text(angle = 45, hjust=1))
+  print(a)
+}
+#DotPlot(combined.obj, features=markers$Gene)+ theme(axis.text.x = element_text(angle = 45, hjust=1))
 ```
 
-Final clusters with some manually provided labels. These do not represent any definitive statement about members of the cluster, but represent a non-expert manual approximation based on the metadata and markers. The previous sections shows genes defining clusters and metadata which may allow a mouse spleen expert to better characterize these groupings. 
+# Final cluster labels
 
 ```{r label_clusters, fig.width=10, fig.height=10}
 cluster_tags <- c(
-  "0. Cd8a+ T cells",    #0
-  "1. Ly6c1+ Cd4+ T cells",
-  "2. Cd4+ T cells",
-  "3. Cd8a+ T cells",
-  "4",    
-  "5",               #5
-  "6",
-  "7 ",# Ccr2+",
-  "8 ",#. Clec9a+ Dendritic",
-  "9",          
-  "10",                   #10
-  "11",
-  "12. Natural killer cells",
-  "13 ",#. Ccr2+",
-  "14 ",#. cDC1s Dendritic cells",
-  "15. Macrophages",        #15
-  "16",
-  "17. Naive B cells"
+  "0. NT/CM CD8+ T cells",    #0
+  "1. NT/CM CD4+ T cells",
+  "2. EM CD4+ T cells",
+  "3. Neutrophils",
+  "4. EM CD8+ T cells",#Neutrophils",    
+  "5. Monocytes/Macrophages",               #5
+  "6. Plasmacytoid DC?",
+  "7. Neutrophils",
+  "8. DC (Myeloid?)",
+  "9. Basophil or Erythroid",          
+  "10. Neutrophil/Eosinophil?",                   #10
+  "11. Monocytes",
+  "12. NK cells",
+  "13. DC"
   )
-combined.sct$labels <- "NA"
-combined.sct$labels <- plyr::mapvalues(combined.sct$seurat_clusters, 
-                                       from=0:17, to=cluster_tags)
-DimPlot(combined.sct, group.by = "labels", label = TRUE, label.box=TRUE, repel=TRUE) + theme(legend.position="none") + ggtitle("Manual labels")
+combined.obj$labels <- "NA"
+combined.obj$labels <- plyr::mapvalues(combined.obj$seurat_clusters, 
+                                       from=0:(length(unique(combined.obj$seurat_clusters))-1), to=cluster_tags)
+DimPlot(combined.obj, group.by = "labels", label = TRUE, label.box=TRUE, repel=TRUE) + theme(legend.position="none") + ggtitle("Manual labels")
+```
+
+# Differential gene expression {.tabset}
+
+DGE within clusters of interest. Each comparison has a tab with the following components:
+
+* Number of cells from each condition
+* Conserved markers for the cluster are shown as safety check to confirm selection and annotation (these are the same as the previous section, just specific to the cluster of interest)
+* Differentially expressed genes tables
+
+
+DGE tables have the following values:
+
+* Adj. p val : Adjusted p-value, based on Bonferroni correction using all features in the dataset.
+* Mean log2 fold change : log fold-change of the average expression between the two groups. **Positive values indicate that the feature is more highly expressed in the  LysM-cre group**
+* pct.1 : The percentage of cells where the feature is detected in the first group
+* pct.2 : The percentage of cells where the feature is detected in the second group
+    
+    
+```{r}
+per_cluster_DGE <- function(cluster_num){
+  #cat('Number of cells from each condition')
+  counts <- table((combined.obj@meta.data %>% filter(seurat_clusters == cluster_num))$orig.ident)
+  
+  #cat('Conserved cluster markers')
+  consmarkers <- datatable(conserved_markers_pos %>% filter(cluster == cluster_num) %>% mutate_if(is.numeric, ~round(., 2)) %>% filter(max_pval<0.05) %>% dplyr::select(cluster, Gene, avg_log2FC, max_pval, `LysM-cre_pct.1`, `LysM-cre_pct.2`, `Ptpn11-E76K-pos-LysM-cre_pct.1`, `Ptpn11-E76K-pos-LysM-cre_pct.2`), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold-change across conditions in cluster", "Max Adj. p val", "% detected in\nLysm-cre in cluster", "% detected in Lysm-cre noutside cluster", 
+                              "% detected in Ptpn11-E76K-pos in cluster", "% detected in Ptpn11-E76K-pos outside cluster"              ), caption = 'Marker genes for cluster')
+  
+  markers <- FindMarkers(subset(combined.obj, subset = seurat_clusters == cluster_num), group.by = 'orig.ident', ident.1 = "LysM-cre", ident.2 = "Ptpn11-E76K-pos-LysM-cre", assay = 'RNA', min.pct = 0.25, verbose = FALSE, logfc.threshold = log2(1.5), test.use = 'MAST') %>% rownames_to_column('Gene')
+  
+  #cat('DGE')
+  
+  dge <- datatable(markers %>% mutate_if(is.numeric, ~round(., 4)) %>% filter(p_val_adj<0.05) %>% dplyr::select(Gene, avg_log2FC, p_val_adj, pct.1, pct.2), filter = 'top', rownames = FALSE, colnames=c("Gene", "Mean log2\nfold change", "Adj. p val", "% detected\nin LysM-cre", "% detected\nin Ptpn11-E76K-pos-LysM-cre"), caption = 'DGE within cluster')
+  return(list(counts=counts, conserved_markers=consmarkers, dge=dge))
+}
+```
+
+
+## 0. NT/CM CD8+ T cells
+
+```{r}
+results <- per_cluster_DGE(0)
+results$counts
+results$conserved_markers
+results$dge
+```
+
+
+## 4. EM CD8+ T cells
+
+```{r}
+results <- per_cluster_DGE(4)
+results$counts
+results$conserved_markers
+results$dge
+```
+
+## 3. Neutrophils
+
+```{r}
+results <- per_cluster_DGE(3)
+results$counts
+results$conserved_markers
+results$dge
+```
+
+## 7. Neutrophils
+
+```{r}
+results <- per_cluster_DGE(7)
+results$counts
+results$conserved_markers
+results$dge
+```
+
+## 10. Neutrophils/eosinophils (?)
+
+```{r}
+results <- per_cluster_DGE(10)
+results$counts
+results$conserved_markers
+results$dge
+```
+
+## 6. Plasmacytoid DC(?)
+
+```{r}
+results <- per_cluster_DGE(6)
+results$counts
+results$conserved_markers
+results$dge
 ```
