@@ -52,30 +52,26 @@ create_hashed_objects <- function(file, label, hash_table, mito.pattern = "^MT",
 }
 
 ## plot ncountRNAxpercent.mito and ncountRNAxnFeatureRNA in the same plot with lines for possible cutoffs
-qc_vln_plots <- function(obj, mt.cutoff = 5, nfeature.cutoff.low = 400, nfeature.cutoff.high = 6000,
-                         ncount.low=1000, ncount.high=20000, bootstrap=TRUE) {
-  if (bootstrap) {
-    nfeature.cutoff <- bootstrap_cutoffs(obj, feature='nFeature_RNA')
-    nfeature.cutoff.low <- nfeature.cutoff$low
-    nfeature.cutoff.high <- nfeature.cutoff$high
-    mt.cutoff <- bootstrap_cutoffs(obj, feature='percent.mito')$high
-    ncount <- bootstrap_cutoffs(obj, feature='nCount_RNA')
-    ncount.low <- ncount$low
-    ncount.high <- ncount$high
-  }
-  plot1 <- FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mito") +
-    geom_hline(yintercept = mt.cutoff, lty='dashed') +
-    theme(legend.position="none") + 
-    geom_vline(xintercept=ncount.high, lty='dashed') + 
-    geom_vline(xintercept=ncount.low, lty='dashed')
-  plot2 <- FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA") +
-    geom_hline(yintercept=nfeature.cutoff.low, lty='dashed') +
-    geom_hline(yintercept=nfeature.cutoff.high, lty='dashed') + 
-    geom_vline(xintercept=ncount.high, lty='dashed') + 
-    geom_vline(xintercept=ncount.low, lty='dashed')
+qc_plots_cutoffs <- function(obj, cutoffs, show_outliers=FALSE) {
+  project <- obj@project.name
+  plot1 <- FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "percent.mito",
+                          group.by = (if (show_outliers) 'outlier' else NULL)) +
+    theme(legend.position=(if (show_outliers) 'right' else 'none')) +
+    labs(color = 'Outlier') +
+    geom_hline(yintercept=cutoffs$percent.mito.max, lty='dashed') +
+    geom_vline(xintercept=cutoffs$nCount_RNA.max, lty='dashed') + 
+    geom_vline(xintercept=cutoffs$nCount_RNA.min, lty='dashed') +
+    ggtitle(project)
+  plot2 <- FeatureScatter(obj, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",
+                          group.by = (if (show_outliers) 'outlier' else NULL)) +
+    theme(legend.position=(if (show_outliers) 'right' else 'none')) +
+    labs(color = 'Outlier') +
+    geom_hline(yintercept=cutoffs$nFeature_RNA.max, lty='dashed') +
+    geom_hline(yintercept=cutoffs$nFeature_RNA.min, lty='dashed') + 
+    geom_vline(xintercept=cutoffs$nCount_RNA.max, lty='dashed') + 
+    geom_vline(xintercept=cutoffs$nCount_RNA.min, lty='dashed') +
+    ggtitle(project)
   print(plot1 + plot2)
-  return(data.frame(nfeature=c(nfeature.cutoff.low,nfeature.cutoff.high), ncount=c(ncount.low,ncount.high), mito=c(0, mt.cutoff), row.names = c('low', 'high')))
-  
 }
 
 ## estimating cutting off extreme values 
@@ -139,4 +135,55 @@ qc_plots_hash <- function(cap){
   plot1 + plot2 
 }
 
+qc_plots <- function(cap, show_outliers=FALSE){
+  plot1 <- FeatureScatter(cap, feature1 = "nCount_RNA", feature2 = "percent.mito",
+                          group.by = (if (show_outliers) 'outlier' else NULL))  +
+    theme(legend.position=(if (show_outliers) 'right' else 'none')) +
+    labs(color = 'Outlier') +
+    ggtitle(cap@project.name)
+  plot2 <- FeatureScatter(cap, feature1 = "nCount_RNA", feature2 = "nFeature_RNA",
+                          group.by = (if (show_outliers) 'outlier' else NULL)) +
+    theme(legend.position=(if (show_outliers) 'right' else 'none')) +
+    labs(color = 'Outlier') +
+    ggtitle(cap@project.name)
+  plot1 + plot2 
+}
 
+### Outlier detection for a vector of values, based on median absolute deviation
+is_outlier <- function(data, nmads){
+  data.mad <- mad(data)
+  outlier = (
+    (data < median(data) - nmads * data.mad) |
+      (median(data) + nmads * data.mad < data)
+  )
+  outlier
+}
+detect_outliers <- function(capture, nmads=4){
+  ## Log transforming data to normalize it
+  outliers <- (is_outlier(log1p(capture$nCount_RNA), nmads) |
+                 is_outlier(log1p(capture$nFeature_RNA), nmads))
+  capture$outlier <- outliers
+  capture
+}
+
+## Runs doublet finder, with or without hashing. Latent doublet rate
+## may need to be changed depending on library prep
+doublet_finder <- function(obj, pcs, hashed,
+                           cores = 1, doublet_rate = 0.075){
+  sweep.res.list <- paramSweep_v3(obj, PCs = 1:pcs, sct = TRUE,
+                                  num.cores = cores)
+  if (hashed) {
+    sweep.stats <- summarizeSweep(sweep.res.list, GT = TRUE, 
+                                  GT.calls = obj$HTO_classification.global)
+  } else {
+    sweep.stats <- summarizeSweep(sweep.res.list, GT = FALSE)
+  }
+  bcmvn <- find.pK(sweep.stats)
+  pK <- bcmvn[bcmvn$BCmetric==max(bcmvn$BCmetric),'pK']
+  annotations <- obj@meta.data$seurat_clusters
+  homotypic.prop <- modelHomotypic(annotations) ## ex: annotations <- seu_kidney@meta.data$ClusteringResults
+  nExp_poi <- round(doublet_rate*nrow(obj@meta.data))  ## Assuming 7.5% doublet formation rate - tailor for your dataset
+  nExp_poi.adj <- round(nExp_poi*(1-homotypic.prop))
+  results <- doubletFinder_v3(obj, PCs = 1:pcs, pK = as.numeric(as.character(pK)), nExp = nExp_poi.adj, sct = TRUE)
+  return(results)
+}
