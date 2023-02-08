@@ -94,6 +94,31 @@ samples <- read.table('samplesheet.txt', header=TRUE)
 qc_metrics <- capture_QC_metrics_hashed(samples)
 ```
 
+<!-- If not hashed, you can comment the summary and detail chunks out -->
+<!-- and use these simpler plots instead -->
+
+<!-- # ```{r qc_metrics_table, eval=FALSE} -->
+<!-- # samples <- read.table('samplesheet.txt', header=TRUE) -->
+<!-- # qc_metrics <- capture_QC_metrics(samples) -->
+<!-- # knitr::kable(qc_metrics) -->
+<!-- # ``` -->
+<!-- # -->
+<!-- # ```{r qc_metrics_plot, fig.width=14, fig.height=4, eval=FALSE} -->
+<!-- # columns <- c("Estimated Number of Cells", "Mean Reads per Cell", "Median Genes per Cell", "Number of Reads", "Reads Mapped Confidently to Genome", "Fraction Reads in Cells", "Total Genes Detected", "Median UMI Counts per Cell") -->
+<!-- # qc_metrics_plot <- qc_metrics -->
+<!-- # qc_metrics_plot <- gsub(",", "", qc_metrics_plot) -->
+<!-- # qc_metrics_plot <- gsub("%", "", qc_metrics_plot) -->
+<!-- # qc_metrics_plot <- as.data.frame(qc_metrics_plot) -->
+<!-- # qc_metrics_plot[] <- sapply(qc_metrics_plot, as.numeric) -->
+<!-- # melt(t(qc_metrics_plot[rownames(qc_metrics_plot) %in% columns,])) %>% -->
+<!-- #   ggplot(aes(x=Var1, y=value, fill=Var1)) + -->
+<!-- #   geom_col() + -->
+<!-- #   facet_wrap(vars(Var2 ), ncol = 4, scales='free_y') + -->
+<!-- #   theme_bw() + -->
+<!-- #   labs(x=NULL, y=NULL, fill="Sample") #+ scale_y_continuous(limits=c(0,NA)) -->
+<!-- # ``` -->
+
+
 ## Summary
 
 Antibody capture summary
