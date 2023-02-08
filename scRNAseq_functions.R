@@ -187,3 +187,94 @@ doublet_finder <- function(obj, pcs, hashed,
   results <- doubletFinder_v3(obj, PCs = 1:pcs, pK = as.numeric(as.character(pK)), nExp = nExp_poi.adj, sct = TRUE)
   return(results)
 }
+
+
+## Read GEX data and correct ambient RNA with soupX
+read_counts_soupX <- function(label, file, mito.pattern="^MT-") {
+  filtered_data <- Read10X(
+    dir(file.path(config$rootDir, config$alignmentDir, file, 'outs'),
+        recursive = TRUE, pattern = 'filtered_feature_bc_matrix$',
+        include.dirs = TRUE, full.names = TRUE))
+  if (!is.list(filtered_data)) {
+    filtered_data <- list(`Gene Expression` = filtered_data)
+  }
+  
+  clus <- read.csv(file.path(dir(
+    file.path(config$rootDir, config$alignmentDir, file, 'outs'),
+    recursive = TRUE, pattern = 'clustering', include.dirs = TRUE, full.names = TRUE),
+    'gene_expression_graphclust/clusters.csv'))
+  clusters <- clus$Cluster
+  names(clusters) <- clus$Barcode
+  
+  unfiltered_data <- Read10X(dir(file.path(
+    config$rootDir, config$alignmentDir, file, 'outs'),
+    recursive = TRUE, pattern = 'raw_feature_bc_matrix$',
+    include.dirs = TRUE, full.names = TRUE))
+  if (!is.list(unfiltered_data)) {
+    unfiltered_data <- list(`Gene Expression` = unfiltered_data)
+  }
+  
+  sc <- SoupChannel(tod = unfiltered_data$`Gene Expression`,
+                    toc = filtered_data$`Gene Expression`)
+  sc <- setClusters(sc, clusters)
+  sc <- autoEstCont(sc)
+  fixed_counts <- adjustCounts(sc, roundToInt = TRUE)
+  compare <- 1- (rowSums(fixed_counts) / rowSums(filtered_data$`Gene Expression`)) 
+  count_diff <- data.frame(diff=compare, total=rowSums(filtered_data$`Gene Expression`)) %>%
+    rownames_to_column('Gene')
+  soupX_qc_plot_1 <- 
+    ggplot(count_diff,
+           aes(x=diff, y=total, label=Gene, color = grepl(mito.pattern, Gene))) +
+    scale_color_manual(name = 'Mitochondrial genes',
+                       values = setNames(c('green', 'grey'), c(TRUE,FALSE))) + 
+    geom_point(alpha=0.5) + 
+    geom_text_repel(data=subset(count_diff, diff > 0.25 | total > 1000000),
+                    position=position_jitter()) + 
+    scale_y_log10() + 
+    labs(x='Portion of reads removed', y='Original count total', title = label) +
+    theme_bw()
+  message('SoupX diagnostic plots saved in "plots/"')
+  ggsave(paste0('plots/', label, '_QC1_soupX.png'), plot = soupX_qc_plot_1)
+  
+  soupX_qc_plot_2 <- 
+    ggplot(count_diff, aes(x=diff)) + 
+    geom_histogram() +
+    theme_bw() + 
+    labs(x='Proportion of reads removed', y='Frequency',
+         title = 'Portion of reads removed per sample')
+  ggsave(paste0('plots/', label, '_QC2_soupX.png'), plot = soupX_qc_plot_2)
+  filtered_data$`Gene Expression` <- fixed_counts
+  filtered_data
+}
+
+## Create seurat object from counts (ideally the corrected ones from SoupX)
+create_and_preprocess_Seurat_object_from_counts <- function(
+    counts, project_label,
+    mito.pattern = "^MT", ribo.pattern="^RP[SL]",
+    min.cells=10, min.features=0,
+    s.features, g2m.features) {
+  
+  obj <- CreateSeuratObject(counts=counts$`Gene Expression`, project = project_label,
+                            min.cells = min.cells, min.features=min.features)
+  obj <- NormalizeData(obj)
+  obj <- FindVariableFeatures(obj, selection.method = "mean.var.plot")
+  obj <- ScaleData(obj, features=VariableFeatures(obj))
+  obj <- CellCycleScoring(obj, s.features=s.features, g2m.features = g2m.features)
+  obj[["percent.mito"]] <- PercentageFeatureSet(obj, pattern=mito.pattern)
+  obj[["percent.ribo"]] <- PercentageFeatureSet(obj, pattern=ribo.pattern)
+  obj
+}
+
+## Add hash data for Antibody capture assay, using counts object from read_counts_soupX
+add_hash_data <- function(obj, counts, hash_table){
+  hto_data <- counts$`Antibody Capture`[
+    rownames(counts$`Antibody Capture`)[
+      grepl("Hash", rownames(counts$`Antibody Capture`), ignore.case = TRUE)
+    ],
+  ]
+  rownames(hto_data) <- plyr::mapvalues(substr(rownames(hto_data), 1, 10),
+                                        from=hash_table$HTO, to=hash_table$Label)
+  obj[['HTO']] <- CreateAssayObject(counts=hto_data)
+  obj <- NormalizeData(obj, assay='HTO', normalization.method = 'CLR')
+  HTODemux(obj, assay='HTO', positive.quantile = 0.99)
+}

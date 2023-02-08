@@ -1,22 +1,18 @@
 ---
-title: 'QC'
+title: 'p22090 Tiffany QC'
 author: "Emory Gencore"
 date: '`r Sys.Date()`'
-output:   
-  rmdformats::robobook:
-    fig_width: 8
-    gallery: true
-    thumbnails: false
+output: 
+  rmdformats::readthedown:
+    fig_width: 9
+    toc_depth: 1
 ---
 
 <style type="text/css">
-.book .book-body .page-inner {
-  max-width: 1600px;
-  margin-left: auto;
-  margin-right: auto;
-}
+ #content {
+   max-width: 1200px;
+ }
 </style>
-
 
 ```{r, include=FALSE}
 library(Seurat)
@@ -41,150 +37,173 @@ source('scRNAseq_functions.R')
 ```
 
 ```{r slow_chunk_flags}
-load_and_preprocess_counts = FALSE
-perform_soupX = FALSE
-run_doubletFinder = FALSE
+load_and_preprocess_counts = TRUE
+perform_soupX = TRUE
+run_doubletFinder = TRUE
+hashed = TRUE
 preran = TRUE
 report_only = TRUE
 ```
 
-# Sequencing metrics
-
-```{r qc_metrics_table}
-samples <- read.table('samplesheet.txt', header=TRUE)
-qc_metrics <- capture_QC_metrics(samples)
-knitr::kable(qc_metrics)
+```{r}
+## Need HTO and Label columns for premade demultiplexing functions
+hash_table <- data.frame(
+  'Label'=c('RAo18',
+'RCn19',
+'ROi18',
+'RSi19',
+'RTa19',
+'Rta19',
+'ROi18',
+'RAo18',
+'RCn19',
+'Rsi19'),
+  'ID'=c('98677',
+'98678',
+'98679',
+'98680',
+'98681',
+'98681',
+'98679',
+'98677',
+'98678',
+'98680'),
+  'Timepoint'=c(rep('Apr05', 5), rep('Apr20', 5)),
+loaded=c(4223,
+6940,
+318,
+1058,
+14104,
+22344,
+10012,
+12627,
+3323,
+3377)
+  )
+hash_table$HTO <- plyr::mapvalues(hash_table$ID, from=c(98677,98678,98679,98680,98681), to=c('Hash1Human','Hash2Human','Hash3Human','Hash4Human','Hash5Human'))
 ```
 
-```{r qc_metrics_plot, fig.width=14, fig.height=4}
-columns <- c("Estimated Number of Cells", "Mean Reads per Cell", "Median Genes per Cell", "Number of Reads", "Reads Mapped Confidently to Genome", "Fraction Reads in Cells", "Total Genes Detected", "Median UMI Counts per Cell")
-qc_metrics_plot <- qc_metrics
-qc_metrics_plot <- gsub(",", "", qc_metrics_plot)
-qc_metrics_plot <- gsub("%", "", qc_metrics_plot)
-qc_metrics_plot <- as.data.frame(qc_metrics_plot)
-qc_metrics_plot[] <- sapply(qc_metrics_plot, as.numeric)
-melt(t(qc_metrics_plot[rownames(qc_metrics_plot) %in% columns,])) %>%
-  ggplot(aes(x=Var1, y=value, fill=Var1)) + 
-  geom_col() + 
-  facet_wrap(vars(Var2 ), ncol = 4, scales='free_y') + 
-  theme_bw() + 
-  labs(x=NULL, y=NULL, fill="Sample") #+ scale_y_continuous(limits=c(0,NA))
+Project description:
+
+`r config$description`
+
+# Sequencing metrics {.tabset}
+
+```{r}
+samples <- read.table('samplesheet.txt', header=TRUE)
+qc_metrics <- capture_QC_metrics_hashed(samples)
+```
+
+## Summary
+
+Antibody capture summary
+
+```{r}
+short <- qc_metrics %>% filter(Category=='Cells', Library.Type=='Antibody Capture') %>% select(ID, Metric.Name, Metric.Value)
+cnames <- short$Metric.Value
+short <- short %>% reshape(idvar="ID",timevar = "Metric.Name", direction='wide') 
+short <- rename_with(short, ~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+knitr::kable(short) %>%
+  kable_styling(full_width = F)
+```
+
+```{r, fig.width=12, fig.height=5}
+qc_metrics_plots <- qc_metrics
+colnames(qc_metrics_plots) <- gsub(".", " ", colnames(qc_metrics_plots), fixed=TRUE)
+qc_metrics_plots$`Metric Value` <- gsub("%", "", qc_metrics_plots$`Metric Value`)
+qc_metrics_plots$`Metric Value` <- gsub(",", "", qc_metrics_plots$`Metric Value`)
+qc_metrics_plots$`Metric Value` <- as.numeric(qc_metrics_plots$`Metric Value`)
+
+a <- c("Estimated number of cells", "Mean reads per cell", "Fraction reads in cells", "Median UMI counts per cell", "Antibody reads usable per cell", "Fraction antibody reads usable")
+tmp <- qc_metrics_plots %>% filter(`Metric Name` %in% a)#%>% mutate_all(function(x) as.numeric(as.character(x)))
+ggplot(tmp %>% select(ID, `Library Type`, `Metric Name`, `Metric Value`) %>% filter(`Library Type`=='Antibody Capture'), aes(x=ID, y=`Metric Value`, fill=ID)) + geom_col() + facet_wrap(vars(`Metric Name`), scales='free_y', ncol=3) + ggtitle('Antibody Capture')
+```
+
+Gene expression summary
+
+```{r}
+short <- qc_metrics %>% filter(Category=='Cells', Library.Type=='Gene Expression') %>% select(ID, Metric.Name, Metric.Value)
+cnames <- short$Metric.Value
+short <- short %>% reshape(idvar="ID",timevar = "Metric.Name", direction='wide') 
+short <- rename_with(short, ~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+knitr::kable(short) %>%
+  kable_styling(full_width = F)#, options = list(searching=FALSE, pageLength=20, lengthMenu=NULL))
+```
+
+
+```{r, fig.width=12, fig.height=5}
+a <- c("Estimated number of cells", "Mean reads per cell", "Median genes per cell", "Number of reads", "Confidently mapped to genome", "Fraction reads in cells", "Median UMI counts per cell")
+tmp <- qc_metrics_plots %>% filter(`Metric Name` %in% a)
+ggplot(tmp %>% select(ID, `Library Type`, `Metric Name`, `Metric Value`) %>% filter(`Library Type`=='Gene Expression'), aes(x=ID, y=`Metric Value`, fill=ID)) + geom_col() + facet_wrap(vars(`Metric Name`), scales='free_y', ncol=3) + ggtitle('Gene Expression')
+```
+
+## Detailed
+
+```{r}
+short <- qc_metrics %>% filter(Category=='Library', Library.Type=='Antibody Capture')# %>% select(ID, Metric.Name, Metric.Value)
+# cnames <- short$Metric.Value
+# short <- short %>% reshape(idvar="ID",timevar = "Metric.Name", direction='wide') 
+# short <- rename_with(short, ~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+knitr::kable(short)#, options = list(searching=FALSE, pageLength=20, lengthMenu=NULL))
+```
+
+```{r}
+short <- qc_metrics %>% filter(Category=='Library', Library.Type=='Gene Expression')# %>% select(ID, Metric.Name, Metric.Value)
+knitr::kable(short)#, options = list(searching=FALSE, pageLength=20, lengthMenu=NULL))
 ```
 
 ***
 
 # Removing ambient RNA
 
-```{r soupx_functions}
-read_counts_soupX <- function(label, file) {
-  filtered_data <- Read10X(
-    dir(file.path(config$rootDir, config$alignmentDir, file, 'outs'),
-        recursive = TRUE, pattern = 'filtered_feature_bc_matrix$',
-        include.dirs = TRUE, full.names = TRUE))
-  clus <- read.csv(file.path(dir(
-    file.path(config$rootDir, config$alignmentDir, file, 'outs'),
-    recursive = TRUE, pattern = 'clustering', include.dirs = TRUE, full.names = TRUE),
-    'gene_expression_graphclust/clusters.csv'))
-  clusters <- clus$Cluster
-  names(clusters) <- clus$Barcode
-  unfiltered_data <- Read10X(dir(file.path(
-    config$rootDir, config$alignmentDir, file, 'outs'),
-    recursive = TRUE, pattern = 'raw_feature_bc_matrix$',
-    include.dirs = TRUE, full.names = TRUE))
-  sc <- SoupChannel(tod = unfiltered_data, toc = filtered_data)
-  sc <- setClusters(sc, clusters)
-  sc <- autoEstCont(sc)
-  fixed_counts <- adjustCounts(sc, roundToInt = TRUE)
-  compare <- 1- (rowSums(fixed_counts) / rowSums(filtered_data)) 
-  count_diff <- data.frame(diff=compare, total=rowSums(filtered_data)) %>%
-    rownames_to_column('Gene')
-  soupX_qc_plot_1 <- 
-    ggplot(count_diff,
-           aes(x=diff, y=total, label=Gene, color = grepl(mito.pattern, Gene))) +
-    scale_color_manual(name = 'Mitochondrial genes',
-                       values = setNames(c('green', 'grey'), c(TRUE,FALSE))) + 
-    geom_point(alpha=0.5) + 
-    geom_text_repel(data=subset(count_diff, diff > 0.25 | total > 1000000),
-                    position=position_jitter()) + 
-    scale_y_log10() + 
-    labs(x='Portion of reads removed', y='Original count total', title = label) +
-    theme_bw()
-  message('SoupX diagnostic plots saved in "plots/"')
-  ggsave(paste0('plots/', label, '_QC1_soupX.png'), plot = soupX_qc_plot_1)
-  
-  soupX_qc_plot_2 <- 
-    ggplot(count_diff, aes(x=diff)) + 
-    geom_histogram() +
-    theme_bw() + 
-    labs(x='Proportion of reads removed', y='Frequency',
-         title = 'Portion of reads removed per sample')
-  ggsave(paste0('plots/', label, '_QC2_soupX.png'), plot = soupX_qc_plot_2)
-  fixed_counts
-}
-
-create_and_preprocess_Seurat_object_from_counts <- function(
-    counts, project_label,
-    mito.pattern = "^mt-", ribo.pattern="^Rp[sl]",
-    min.cells=10, min.features=0,
-    s.features, g2m.features) {
-
-  obj <- CreateSeuratObject(counts=counts, project = project_label,
-                                 min.cells = min.cells, min.features=min.features)
-  obj <- NormalizeData(obj)
-  obj <- FindVariableFeatures(obj)
-  obj <- ScaleData(obj)
-  obj <- CellCycleScoring(obj, s.features=s.features, g2m.features = g2m.features)
-  obj[["percent.mito"]] <- PercentageFeatureSet(obj, pattern=mito.pattern)
-  obj[["percent.ribo"]] <- PercentageFeatureSet(obj, pattern=ribo.pattern)
-  obj
-}
-
-read_counts <- function(file) {
-  filtered_data <- Read10X(
-    dir(file.path(config$rootDir, config$alignmentDir, file, 'outs'),
-        recursive = TRUE, pattern = 'filtered_feature_bc_matrix$',
-        include.dirs = TRUE, full.names = TRUE))
-}
-```
-
 ```{r cc_features}
 ## Adjusting cell cycle scoring gene names if needed 
 ## Either way, set these two variables
-s.features <- str_to_title(cc.genes$s.genes)
-g2m.features <-  str_to_title(cc.genes$g2m.genes)
+s.features <- cc.genes$s.genes
+g2m.features <-  cc.genes$g2m.genes
 ```
 
 ```{r soupx_and_load_data, include=FALSE}
 ## Avoid rerunning computationally expensive steps if parameters haven't changed
-if (load_and_preprocess_counts){
+if (!preran){
   if (perform_soupX){
-    feature_counts <- mapply(read_counts_soupX, samples$Label, samples$FileID)
+    counts <- mapply(read_counts_soupX, samples$Label,
+                     samples$FileID, SIMPLIFY = FALSE)
   } else {
-    feature_counts <- lapply(samples$FileID, read_counts)
-    names(feature_counts) <- samples$Label
+    counts <- lapply(samples$FileID, read_counts)
+    names(counts) <- samples$Label
   }
   captures <- mapply(create_and_preprocess_Seurat_object_from_counts,
-                     feature_counts, names(feature_counts),
+                     counts, names(counts),
                      MoreArgs = list(min.cells=10,
-                                     s.features=s.features,
-                                     g2m.features=g2m.features))
+                                     s.features=cc.genes$s.genes,
+                                     g2m.features=cc.genes$g2m.genes,
+                                     mito.pattern = "^MT", ribo.pattern="^RP[SL]"))
+  if (hashed) {
+    captures <- mapply(add_hash_data, captures, counts,
+                      MoreArgs = list(hash_table = hash_table))
+  }
+  
   saveRDS(captures, file='saved_rds/unfiltered_captures.Rds')
   #captures <- mapply(create_hashed_objects, samples$FileID, samples$Label, hash_table=hash_table, mito.pattern = "^MT", ribo.pattern="^RP[SL]")
-
 } else {
   captures <- readRDS('saved_rds/unfiltered_captures.Rds')
 }
 ```
 
-```{r soupX_plots, fig.cap="", out.width = '100%'}
-for (soupXplot in dir(path='plots', pattern = '*soupX.png', full.names = TRUE)){
-  knitr::include_graphics(soupXplot)
-}
+```{r soupX_plots}
+#paths <- dir(path='plots', pattern = '*QC1_soupX.png', full.names = TRUE)
+### Include graphics doesn't play well with loops, lapply, etc.
+knitr::include_graphics('plots/Apr05_HH_5A_QC1_soupX.png')
+```
+
+```{r}
+knitr::include_graphics('plots/Apr20_HH_5A_QC1_soupX.png')
 ```
 
 ***
 
-# Filtering extremes
+# Filtering data
 
 ```{r}
 ## Median absolute deviation outlier detection. Increasing or decreasing the number  
@@ -210,7 +229,6 @@ for (capture in names(captures)) {
     nFeature_RNA.min = 0
   )
 }
-
 ## Modify cutoffs for individual captures as needed
 ## capture_qc_cutoffs$`LysM-cre`$percent.mito.max <- 10
 ```
@@ -265,8 +283,8 @@ npcs <- list()
 for (capture in names(captures)) {
   npcs[[capture]] <- NA
 }
-npcs$`Ptpn11-E76K-pos-LysM-cre` <- 16
-npcs$`LysM-cre` <- 11
+npcs$Apr05_HH_5A <- 10
+npcs$Apr20_HH_5A <- 10
 ```
 
 
@@ -274,7 +292,6 @@ npcs$`LysM-cre` <- 11
 captures <- lapply(captures, function(x){
   FindNeighbors(x, dims=1:npcs[[x@project.name]], verbose=FALSE)
 })
-
 captures <- lapply(captures, function(x){
   RunUMAP(x, dims=1:npcs[[x@project.name]], reduction='pca')
 })
@@ -282,7 +299,7 @@ captures <- lapply(captures, function(x){
 
 <!-- Removing clusters with low quality cells -->
 
-```{r, eval = !report_only, fig.width=6, fig.height=8, results='hide', fig.keep='all', include=FALSE}
+```{r, eval = !report_only, fig.width=6, fig.height=12, results='hide', fig.keep='all', include=FALSE}
 plot_metadata <- function(data){
   #a1<- DimPlot(data, group.by = 'HTO_classification.global')
   p1 <- FeaturePlot(data, reduction='umap', features="nFeature_RNA") + 
@@ -303,12 +320,11 @@ lapply(captures, plot_metadata)
 ## this is NOT the final clustering, just for input to doubletFinder
 ## just choose a reasonable clustering for this processing
 res <- c(0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1)
-
 resplots <- function(res, x){
   x <- FindClusters(x, resolution = res, verbose=FALSE)
   DimPlot(x, reduction='umap', label=TRUE)
 }
-lapply(res, resplots, x=captures$`Ptpn11-E76K-pos-LysM-cre`)
+lapply(res, resplots, x=captures$Apr20_HH_5A)
 ```
 
 ```{r Removing_clusters, eval = !report_only, results='hide', fig.keep='all', include=FALSE}
@@ -316,22 +332,17 @@ resolutions <- list()
 for (capture in names(captures)) {
   resolutions[[capture]] <- NA
 }
-
-resolutions$`Ptpn11-E76K-pos-LysM-cre` <- 0.4
-resolutions$`LysM-cre` <- 0.2
-
+resolutions$Apr05_HH_5A <- 0.5
+resolutions$Apr20_HH_5A <- 0.2
 ## if there are problem clusters, specify which to remove based on the 
 ## cluster ID. e.g. clusters_to_remove$`LysM-cre` <- c(1,13)
 clusters_to_remove <- list()
 for (capture in names(captures)) {
   clusters_to_remove[[capture]] <- c()
 }
-
-
 captures <- lapply(captures, function(x) {
   FindClusters(x, res = resolutions[[x@project.name]])
 })
-
 ## Removing the clusters. If the clusters_to_remove is still empty,
 ## nothing should happen. You will probably not use this often, since 
 ## the intitial QC filtering should be enough, but this was part of 
@@ -343,8 +354,6 @@ captures <- lapply(captures, function(data){
     droplevels(data@meta.data$seurat_clusters)
     return(data)
   })
-
-
 ```
 
 ```{r reclustering_after_removal, eval = !report_only, include=FALSE}
@@ -355,7 +364,6 @@ if (!is.null(unlist(clusters_to_remove))){
   captures <- lapply(captures, RunUMAP, reduction='pca', dims=1:npcs)
   captures <- mapply(FindClusters, captures, resolution = resolutions)
 } 
-
 ```
 
 ```{r, eval = !report_only, include=FALSE}
@@ -364,14 +372,28 @@ lapply(captures, DimPlot)
 
 ***
 
+
 # Remove doublets
+
+```{r}
+if (hashed){
+  captures <- lapply(captures, function(x){
+  print(paste0('Removing ', sum(x@meta.data$HTO_classification.global=='Negative'),
+               ' negatives from capture ', x@project.name))
+  subset(x, subset = `HTO_classification.global` == 'Negative', invert = TRUE)
+})
+}
+
+```
 
 ```{r doubletFinder, include=FALSE}
 ## this step is long, ~20 mins per capture
-if (run_doubletFinder){
-  ## May need to specify estimated doublet rate if it differs for you
-  captures <- mapply(doublet_finder, captures, npcs)
-  saveRDS(captures, 'saved_rds/doublet_detected_captures.rds')
+if (!preran){
+  if (run_doubletFinder){
+    ## May need to specify estimated doublet rate if it differs for you
+    captures <- mapply(doublet_finder, captures, npcs, hashed=hashed)
+    saveRDS(captures, 'saved_rds/doublet_detected_captures.rds')
+  }
 } else {
   captures <- readRDS('saved_rds/doublet_detected_captures.rds')
 }
@@ -379,39 +401,30 @@ if (run_doubletFinder){
 
 ```{r}
 filter_doublets <- function(capture, hashed) {
-  #neg_idx <- capture$HTO_classification.global=='Negative'
-  x <- capture
   print(capture@project.name)
-  df_column <- colnames(capture@meta.data)[grepl('DF.classifications',
-                                                 colnames(capture@meta.data))]
+  colnames(capture@meta.data)[
+    grepl('DF.classifications', colnames(capture@meta.data))] <- 'DF.classifications'
   if (hashed){
+    print(table(capture$DF.classifications, capture$HTO_classification.global,
+                dnn = c('DoubletFinder', 'Hashing')))
     doub_idx <- capture$HTO_classification.global=='Doublet' | 
-      capture[[df_column]] == 'Doublet'
+      capture$DF.classifications == 'Doublet'
     print(paste0('Removing ', as.character(sum(doub_idx)), ' doublet GEMS'))
-    x <- subset(capture, HTO_classification.global=='Singlet')
+    capture <- subset(capture, HTO_classification.global=='Singlet')
   } else {
-    doub_idx <- capture[[df_column]] == 'Doublet'
+    doub_idx <- capture$DF.classifications == 'Doublet'
     print(paste0('Removing ', as.character(sum(doub_idx)), ' doublet GEMS'))
   }
-  colnames(x@meta.data)[ncol(x@meta.data)] <- 'DF.classifications'
-  x <- subset(x, DF.classifications=='Singlet')
-  x@meta.data <- droplevels(x@meta.data )
-  return(x)
+  #colnames(x@meta.data)[ncol(x@meta.data)] <- 'DF.classifications'
+  capture <- subset(capture, DF.classifications=='Singlet')
+  capture@meta.data <- droplevels(capture@meta.data )
+  return(capture)
 }
-
-captures <- lapply(captures, filter_doublets, hashed = FALSE)
+captures <- lapply(captures, filter_doublets, hashed = hashed)
 ```
 
 ```{r, include=FALSE}
 captures <- lapply(captures, RunPCA)
-```
-
-```{r}
-# if (preran) {
-#   captures <- readRDS('saved_rds/filtered_captures.Rds')
-# } else {
-#   saveRDS(captures, file='saved_rds/filtered_captures.Rds')
-# }
 ```
 
 ***
@@ -422,18 +435,16 @@ captures <- lapply(captures, RunPCA)
 lapply(captures, function(x) ElbowPlot(x, ndims=30) + ggtitle(x@project.name))
 ```
 
-```{r, include=FALSE, eval= !report_only}
+```{r, include=FALSE}
 npcs <- list()
 for (capture in names(captures)) {
   npcs[[capture]] <- NA
 }
-npcs$`Ptpn11-E76K-pos-LysM-cre` <- 11
-npcs$`LysM-cre` <- 11
-
+npcs$Apr05_HH_5A <- 12
+npcs$Apr20_HH_5A <- 10
 captures <- lapply(captures, function(x){
   FindNeighbors(x, dims=1:npcs[[x@project.name]], verbose=FALSE)
 })
-
 captures <- lapply(captures, function(x){
   RunUMAP(x, dims=1:npcs[[x@project.name]], reduction='pca')
 })
@@ -450,14 +461,17 @@ lapply(captures, DimPlot)
 Selecting optimal clustering, with tree of how clusters change with different resolutions
 
 ```{r, include=FALSE}
-# captures <- lapply(captures, function(x){
-#   x <- AddMetaData(x, metadata = paste(x$orig.ident, x$HTO_classification, sep = ':'), col.name='ID')
-# })
-# split.obj <- unlist(lapply(captures, SplitObject, split.by = 'HTO_classification'))
-
 if (preran) {
   combined.obj <- readRDS('saved_rds/combined_obj.rds')
 } else {
+  if (hashed){
+    captures <- lapply(captures, function(x){
+      x <- AddMetaData(x, metadata = 
+                         paste(x$orig.ident, x$HTO_classification, sep = ':'),
+                       col.name='ID')
+  })
+    captures <- unlist(lapply(captures, SplitObject, split.by = 'HTO_classification'))
+  } 
   for (n in 1:length(captures)){
     DefaultAssay(captures[[n]]) <- 'SCT'
   }
@@ -468,14 +482,15 @@ if (preran) {
   
   ## https://github.com/satijalab/seurat/issues/3930
   if (min(unlist(lapply(captures, ncol))) < 50){
-    message('Waring: your smallest split object has fewer than 50 cells. Make sure this is correct before moving forward, it may have impacts on integration')
+    message('Waring: your smallest split object has fewer than 50 cells. 
+            Make sure this is correct before moving forward,
+            it may have impacts on integration')
   }
   
   combined.obj <- IntegrateData(anchors, normalization.method = 'SCT',
                                 k.weight = min(unlist(lapply(captures, ncol)), 100))
   saveRDS(combined.obj, 'saved_rds/combined_obj.rds')
 }
-
 ```
 
 ```{r, include=FALSE}
@@ -484,31 +499,33 @@ ElbowPlot(combined.obj, ndims = 30)
 ```
 
 ```{r, include=FALSE}
-npcs = 13
+npcs = 10
 combined.obj <- FindNeighbors(combined.obj, dims=1:npcs, verbose=FALSE)
 combined.obj <- RunUMAP(combined.obj, reduction='pca', dims=1:npcs)
 ```
 
 <!-- ## Clustering tree -->
 
-```{r, fig.width=12, fig.height=6}
-testclustree <- FindClusters(combined.obj, resolution = c(0.1,0.3,0.4,0.5,0.6,0.7), verbose=FALSE)
+```{r, fig.width=12, fig.height=6,}
+testclustree <- FindClusters(combined.obj, resolution = c(0.4, .45,.5, .55, .6, .65, .7), verbose=FALSE)
 clustree(testclustree) +
     guides(edge_colour = FALSE) + theme(legend.position = "top")
+rm(testclustree)
 ```
 
 
 ```{r, results='hide', fig.keep='none'}
-res <- c(0.25,0.3,0.35)
+res <- c(0.6, 0.65,0.7)
 resplots <- function(res, x){
   x <- FindClusters(x, resolution = res, verbose=FALSE)
-  DimPlot(x, reduction='umap', label=TRUE, group.by = paste0("integrated_snn_res.", res))
+  DimPlot(x, reduction='umap', label=TRUE,
+          group.by = paste0("integrated_snn_res.", res))
 }
 lapply(res, resplots, x=combined.obj)
 ```
 
 ```{r}
-res = 0.3
+res = 0.65
 print(paste0('Selected resolution of ', res))
 combined.obj <- FindClusters(combined.obj, resolution = res, verbose=FALSE)
 #combined.obj <- RunTSNE(combined.obj)
@@ -525,13 +542,29 @@ FeaturePlot(combined.obj, reduction='umap', features=c("nCount_RNA", 'nFeature_R
 DimPlot(combined.obj, split.by = 'orig.ident', label=TRUE)
 ```
 
+```{r, fig.width=12, fig.height=8}
+if (hashed) {
+  DimPlot(combined.obj, split.by = 'ID', ncol = 5, group.by='HTO_classification')
+}
+```
+
 How much of each capture is in each cluster
 
 ```{r}
-tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
+if (hashed){
+  tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters,
+                                    combined.obj$ID))
+  knitr::kable(tmp, caption = 'Number of cells')
+  tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
+  knitr::kable(tmp, caption = 'Percentage of cells from capture', digits = 1)
+} else {
+  tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters,
+                                    combined.obj$orig.ident))
 knitr::kable(tmp, caption = 'Number of cells')
 tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
 knitr::kable(tmp, caption = 'Percentage of cells from capture', digits = 1)
+}
+
 ```
 
 
@@ -540,7 +573,3 @@ if (!preran){
   saveRDS(combined.obj, file='saved_rds/combined_obj_final.Rds')
 }
 ```
-
-
-
-
