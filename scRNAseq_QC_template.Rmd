@@ -595,6 +595,6 @@ knitr::kable(tmp, caption = 'Percentage of cells from capture', digits = 1)
 
 ```{r}
 if (!preran){
-  saveRDS(combined.obj, file='saved_rds/combined_obj_final.Rds')
+  saveRDS(combined.obj, file='saved_rds/combined_obj_postQC.Rds')
 }
 ```
