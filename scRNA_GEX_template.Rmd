@@ -20,326 +20,257 @@ output:
 
 
 ```{r, include=FALSE}
+library(ggrepel)
+library(DT)
 library(Seurat)
 library(tidyverse)
 library(reshape2)
-library(SingleR)
+library(dplyr)
+library(biomaRt)
+library(fgsea)
+#library(org.Mm.eg.db)
+#library(clusterProfiler)
 library(ape)
 library(MAST)
-library(glmGamPoi)
-library(kableExtra)
-library(SoupX)
-library(gridExtra)
 library(DoubletFinder)
-#library(SC3)
-library(rngtools)
-library(ggrepel)
-library(DT)
-library(clustree)
+library(Azimuth)
+library(SeuratData)
+library(patchwork)
 #library(package = affyLib, )
-knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, cache=FALSE, cache.lazy = FALSE, fig.width = 5, fig.height = 5)#, include=FALSE)
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, cache=TRUE, cache.lazy=FALSE)
 config <- yaml::yaml.load_file("scRNA_GEX_config.yml")
 source('scRNAseq_functions.R')
-# recluster <- FALSE
-# resave_combined_obj <- FALSE
-preran=TRUE
 ```
 
 
 ```{r}
-combined.obj <- readRDS('saved_rds/combined_obj.Rds')
+combined.obj <- readRDS('saved_rds/combined_obj_postQC.Rds')
+DefaultAssay(combined.obj) <- "integrated"
 ```
 
-# Reference based cell-type identification
+# Overview
 
-```{r reference_data, include=FALSE}
-# eval=!preran 
-seurat_map <- function(obj, ref, normalization.method = "SCT",
-                       reference.reduction="pca",
-                       refdata = list(cell_ontolog_class = "cell_ontology_class"),
-                       ndims=20){
-  anchors <- FindTransferAnchors(
-    reference = ref,
-    query = obj,
-    normalization.method = normalization.method,
-    reference.reduction = reference.reduction,
-    dims = 1:ndims
-  )
-  obj <- MapQuery(
-    anchorset = anchors,
-    query = obj,
-    reference = ref,
-    refdata = refdata
-  )
-  obj
-}
-## Load reference object
-load('droplet_Spleen_seurat_tiss.Robj')
-tiss <- UpdateSeuratObject(tiss)
-tiss <- SCTransform(tiss, verbose=FALSE)
-combined.obj <- seurat_map(combined.obj, ref=tiss)
-
-```
+We are collecting FNA samples from rhesus macaques pre and post chimeric influenza vaccination. We aim to identify the subsets of dendritic cells and monocytes being trafficked to the lymph node post cH5 mRNA immunization.
 
 ```{r}
-mapping_results <- table(combined.obj@meta.data$predicted.cell_ontolog_class, combined.obj@meta.data$orig.ident)
-knitr::kable(mapping_results)
+DimPlot(combined.obj, reduction = 'umap', label=TRUE)
 ```
 
-```{r, results='hide', fig.keep='all'}
+## Tabula sapiens map query
 
-plot_mapping_results <- function(data){
-  ggplot(data@meta.data, aes(x=predicted.cell_ontolog_class, y=predicted.cell_ontolog_class.score)) + geom_boxplot() + theme_minimal() + labs(x="Predicted celltype", y="Prediction score", caption="Higher prediction score is more confident") + geom_jitter(alpha=0.1)
-  
+```{r reference_data, include=FALSE,}
+## Subsetting tabula sapiens
+# ref <- readRDS("/Volumes/yerkes/genomelab/illumina/runs/Genome_references/tabula_sapiens/local.rds")
+# ref@assays$RNA@key <- "rna_"
+# ref <- subset(x=ref, subset = tissue == "lymph node")
+# saveRDS(ref, file='tabula_sapiens_lymph_subset.Rds')
+ref <- readRDS('tabula_sapiens_lymph_subset.Rds')
+```
+
+```{r, include=FALSE, cache=TRUE}
+# library(biomaRt)
+# human <- useMart('ensembl', dataset = 'hsapiens_gene_ensembl')
+# rhesus <- useMart('ensembl', dataset = 'mmulatta_gene_ensembl')
+# annot_table <- getLDS(
+#   mart = human,
+#   attributes = c('ensembl_gene_id','external_gene_name','chromosome_name'),
+#   martL = rhesus,
+#   attributesL = c('ensembl_gene_id','external_gene_name','chromosome_name','gene_biotype'))
+
+## Reformatting reference for macaque genes
+transfer_table <- read.csv('human_to_macaque_table.txt', sep='\t')
+human_to_macaque_symbols <- function(gene, transfer_table){
+  if (gene %in% transfer_table$Human.gene.name){
+    transfer_table = transfer_table %>% filter(Human.gene.name == gene)
+    
+  } else if (gene %in% transfer_table$Human.gene.stable.ID){
+    transfer_table = transfer_table %>% filter(Human.gene.stable.ID == gene)
+  } else {
+    return('NA')
+  }
+  if (!is.null(transfer_table$Gene.name )) {
+    return(transfer_table[1,]$Gene.name)
+  } else  if (!is.null(transfer_table$Gene.stable.ID)) {
+    return(transfer_table[1,]$Gene.stable.ID)
+  } else {
+    return('NA')
+  }
 }
-plot_mapping_results(combined.obj)
+fixed_gene_names <- unlist(lapply(rownames(ref),
+                                  human_to_macaque_symbols,
+                                  transfer_table = transfer_table))
+fixed_gene_names[nchar(fixed_gene_names)==0] <- "NA"
+counts <- GetAssayData(ref,assay = "RNA",slot = "counts")
+rownames(counts) <- fixed_gene_names
+counts <- counts[!rownames(counts)=="NA",]
+ref <- CreateSeuratObject(counts = counts[!duplicated(rownames(counts)),], meta.data = ref@meta.data)
+
+## Make the umap for the reference ahead of time
+ref <- SCTransform(ref)
+ref <- RunPCA(ref)
+ref <- RunUMAP(ref, dims = 1:30, reduction = 'pca', return.model = TRUE)
 ```
 
-```{r}
-DefaultAssay(combined.obj) <- 'RNA'
-```
-
-
-
-<!-- # Cross-capture conserved cluster markers -->
-# Removing unwanted celltypes
-
-Celltype removal is based on clustering and marker gene identification, not reference mapping
-
-```{r, include=FALSE, eval=FALSE}
-if (preran) {
-  #clusters.markers <- readRDS('saved_rds/clusters_markers.Rds')
-  conserved_markers_pos <- readRDS('saved_rds/conserved_markers.Rds')
-} else {
-  #clusters.markers <- FindAllMarkers(combined.obj, min.pct = 0.25, logfc.threshold = log2(1.5), assay = 'RNA')
-  # conserved_markers <- lapply(levels(combined.obj$seurat_clusters), function(x) {
-  #   a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
-  #                             logfc.threshold = log2(1.5), min.pct = 0.25)
-  #   a$cluster <- x
-  #   return(a %>% rownames_to_column('Gene'))
-  # })
-  conserved_markers_pos <- lapply(levels(combined.obj$seurat_clusters), function(x) {
-    a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
-                              logfc.threshold = log2(1.5), min.pct = 0.25, only.pos = TRUE)
-    a$cluster <- x
-    return(a %>% rownames_to_column('Gene'))
-  })
-  #conserved_markers <- bind_rows(conserved_markers)
-  conserved_markers_pos <- bind_rows(conserved_markers_pos)
-  #saveRDS(clusters.markers, "saved_rds/clusters_markers.Rds")
-  saveRDS(conserved_markers_pos, "saved_rds/conserved_markers_pos.Rds")
-}
-
-
-
-# for (i in 0:(length(conserved_markers)-1)){
-#   conserved_markers[[i+1]]$cluster <- i
-#   conserved_markers[[i+1]] <- conserved_markers[[i+1]] %>% rownames_to_column('Gene')
-# }
-
-```
-
-```{r, include=FALSE, eval=FALSE}
-tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
-tmp <- 100*tmp/rowSums(tmp)
-#tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
-knitr::kable(tmp, caption = 'Percentage of cluster from each capture', digits = 1)
-```
-
-```{r , fig.height=16, fig.width=16, include=FALSE, eval=FALSE}
-conserved_markers_pos$avg_log2FC <- (conserved_markers_pos %>% select(contains('log2FC')) %>% transmute(avg_log2FC=rowMeans(.)))$avg_log2FC
-top10 <- conserved_markers_pos %>%
-    group_by(cluster) %>%
-    top_n(n = 5, wt = abs(avg_log2FC))
-DoHeatmap(combined.obj, features = top10$Gene)
-```
-
-```{r, include = FALSE, eval = FALSE}
-datatable(conserved_markers %>% mutate_if(is.numeric, ~round(., 2)) %>% filter(max_pval<0.05) %>% dplyr::select(cluster, Gene, avg_log2FC, max_pval, `LysM-cre_pct.1`, `LysM-cre_pct.2`, `Ptpn11-E76K-pos-LysM-cre_pct.1`, `Ptpn11-E76K-pos-LysM-cre_pct.2`), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold-change across conditions in cluster", "Max Adj. p val", "% detected in\nLysm-cre in cluster", "% detected in Lysm-cre noutside cluster", 
-                            "% detected in Ptpn11-E76K-pos in cluster", "% detected in Ptpn11-E76K-pos outside cluster"              ))
-```
-
-<!-- Genes plotted here were pulled from top conserved markers as well as genes used in Peng's previous inquiry -->
-
-```{r, fig.width=6}
-markers <- read.csv('markers.txt', header=TRUE)
-for (celltype in c('B cells', 'Plasma cells')){
-  genes <- markers %>% filter(Celltype==celltype)
-  a <- DotPlot(combined.obj, features=genes$Gene, assay='RNA', col.max = 50) + ggtitle(celltype)#, col.min = 0, col.max = 5) #+ ggtitle(celltype) #+ theme(axis.text.x = element_text(angle = 45, hjust=1))
-  print(a)
-}
-#DotPlot(combined.obj, features=markers$Gene)+ theme(axis.text.x = element_text(angle = 45, hjust=1))
-```
-
-<!-- # Cluster labels -->
-
-<!-- Final clusters with some manually provided labels. These do not represent any definitive statement about members of the cluster, but represent a non-expert manual approximation based on the metadata and markers. The previous sections shows genes defining clusters and metadata which may allow a mouse spleen expert to better characterize these groupings.  -->
-
-```{r , fig.width=10, fig.height=10}
-cluster_tags <- c(
-  "0",#. Cd8a+ T cells",    #0
-  "1",#. Ly6c1+ Cd4+ T cells",
-  "2",#. Cd4+ T cells",
-  "3",#. Cd8a+ T cells",
-  "4",#. Neutrophils",    
-  "5",#. Monocytes/Macrophages",               #5
-  "6",#. Neutrophils",
-  "7",#. Basophil or Erythroid",
-  "8",#. DC (Myeloid?)",
-  "9",#. Plasmatoid DC?",          
-  "10",#. Neutrophil/Eosinophil?",                   #10
-  "11",#. NK cells",
-  "12",#. Monocytes",
-  "13",#. DC",
-  "14. Plasma cells",
-  "15. B cells"        #15
-  )
-combined.obj$labels <- "NA"
-combined.obj$labels <- plyr::mapvalues(combined.obj$seurat_clusters, 
-                                       from=0:15, to=cluster_tags)
-DimPlot(combined.obj, group.by = "labels", label = TRUE, label.box=TRUE, repel=TRUE, cells.highlight = colnames(subset(combined.obj, subset = seurat_clusters %in% c('14', '15')))) + theme(legend.position="none") + ggtitle("Unwanted clusters")
-```
-
-```{r}
-combined.obj.full <- combined.obj
-combined.obj.removed <- subset(combined.obj, subset = seurat_clusters %in% c(14, 15), invert=FALSE)
-combined.obj <- subset(combined.obj, subset = seurat_clusters %in% c(14, 15), invert=TRUE)
-
-```
 
 ```{r, include=FALSE}
-DefaultAssay(combined.obj) <- 'integrated'
-combined.obj <- RunPCA(combined.obj)
-ElbowPlot(combined.obj, ndims = 30)
+combined.obj <- seurat_map_reference(combined.obj, ref=ref)
 ```
 
-```{r, include=FALSE}
-npcs = 12
-combined.obj <- FindNeighbors(combined.obj, dims=1:npcs, verbose=FALSE)
-combined.obj <- RunUMAP(combined.obj, reduction='pca', dims=1:npcs)
+```{r genes_to_exclude, include=FALSE, eval=FALSE}
+# 
+# GFF <- read.gff(file.path(config$rootDir, "/Genome_references/mus_musculus/GRCm38/ensembl_102/Mus_musculus.GRCm38.102.gtf"))
+# 
+# 
+# GFF$gene_biotype <- unlist(lapply(GFF$attributes, extract_attributes, "gene_biotype"))
+# GFF$name <- unlist(lapply(GFF$attributes, extract_attributes, "name"))
+# coding.genes <- unique(GFF %>% filter(gene_biotype=="protein_coding") %>% select(name))
+# ig.genes <- unique(GFF %>% filter(grepl("IG_", gene_biotype)) %>% select(name))
+# tr.genes <- unique(GFF %>% filter(grepl("TR_", gene_biotype)) %>% select(name))
+# mt.genes <- unique(GFF %>% filter(grepl("mt-", name)) %>% select(name))
+# #genes <- convertMouseGeneList(humGenes)
+
 ```
 
-```{r, fig.width=12, fig.height=6, include = FALSE}
-testclustree <- FindClusters(combined.obj, resolution = c(0.1,0.2,0.3,0.4,0.5,0.6,0.7), verbose=FALSE)
-clustree(testclustree) +
-    guides(edge_colour = FALSE) + theme(legend.position = "top")
-```
-
-```{r}
-res = 0.3
-
-combined.obj <- FindClusters(combined.obj, resolution = res, verbose=FALSE)
-DefaultAssay(combined.obj) <- 'RNA'
-combined.obj <- NormalizeData(combined.obj)
-combined.obj <- FindVariableFeatures(combined.obj)
-combined.obj <- ScaleData(combined.obj)
-```
-
-# Metadata 
-
-## Cluster membership {.tabset}
-How much of each capture is in each cluster
-
-```{r}
-tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
-knitr::kable(tmp, caption = 'Number of cells per cluster')
-tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
-knitr::kable(tmp, caption = '% of total capture per cluster', digits = 1)
-tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters, combined.obj$orig.ident))
-tmp <- 100*tmp/rowSums(tmp)
-#tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
-knitr::kable(tmp, caption = '% of cluster belonging to each capture', digits = 1)
-```
-
-
-## Mapping features
-
-```{r, fig.width=8}
-DimPlot(combined.obj, split.by = "orig.ident") + ggtitle("Capture")
-```
-
-```{r, fig.width = 8, fig.height = 4}
-p1 <- DimPlot(combined.obj, group.by = "predicted.cell_ontolog_class") + ggtitle("Predicted cell ontology class")
-p2 <- FeaturePlot(combined.obj, reduction='umap', features="predicted.cell_ontolog_class.score") + ggtitle("Class prediction score")
+```{r, fig.width=8, fig.height=6}
+### Showing how query maps to ref
+p1 <- DimPlot(ref, reduction = "umap", group.by = "cell_type",
+              label = TRUE, label.size = 3, repel = TRUE) +
+  NoLegend() + ggtitle("Reference annotations")
+p2 <- DimPlot(combined.obj, reduction = "ref.umap",
+              group.by = "predicted.cell_type", label = TRUE, 
+              label.size = 3, repel = TRUE) + 
+  NoLegend() + ggtitle("Query transferred labels")
 p1 + p2
 ```
 
-Cell cycle is predicted using human cell cycle markers mapped to mouse genes, so they may not be the most accurate for mouse cells
+```{r, fig.height=6, fig.width=8, warning=FALSE}
+## Can specify facet order to rearrange facets, otherwise it will just be sequential
+map_prediction_facetplot(combined.obj,
+                         label_column = 'predicted.cell_type', 
+                         score_column = 'predicted.cell_type.score',
+                         min_freq = 0.05,
+                         facet_order = c(3,9,1,12,13,15,14,0,10,4,2,16,7,5,6,8,11) )
+```
 
 ```{r}
-DimPlot(combined.obj, group.by = "Phase") + ggtitle("Cell cycle phase")
+mapquery_top_results(combined.obj,
+                     label_column = 'predicted.cell_type', 
+                     score_column = 'predicted.cell_type.score',
+                     top_n = 2) %>%
+  knitr::kable(digits = 3, 
+               col.names = c('Cluster',
+                             'Predicted cell type',
+                             'Median confidence score', 
+                             'Proportion of cluster'),
+               caption = 'Top 2 most common calls for each cluster')
 ```
 
-```{r, fig.width = 8, fig.height = 8}
-FeaturePlot(combined.obj, reduction='umap', features=c('nCount_RNA', "nFeature_RNA", "percent.mito", "percent.ribo"))
+## Azimuth PBMCs map query 
+
+```{r, include=FALSE}
+# library(pbmcref.SeuratData)
+# InstallData('pbmc3k')
+# LoadData('pbmcref')
+pcmb_ref <- LoadData('pbmcref', "azimuth")
+combined.obj.pbmc <- RunAzimuth(combined.obj, reference = 'pbmcref', umap.name='azimuth.umap')
 ```
 
-# Cluster labeling
+```{r, fig.width=8, fig.height=6}
+p1 <- DimPlot(pcmb_ref$map, reduction = "refUMAP", group.by = "celltype.l2",
+              label = TRUE, label.size = 3, repel = TRUE) +
+  NoLegend() + ggtitle("Reference annotations")
+p2 <- DimPlot(combined.obj.pbmc, reduction = "azimuth.umap",
+              group.by = "predicted.celltype.l2", label = TRUE, 
+              label.size = 3, repel = TRUE) + 
+  NoLegend() + ggtitle("Query transferred labels")
+p1 + p2
+```
 
-```{r, include=FALSE, eval=TRUE}
-if (preran) {
-  #clusters.markers <- readRDS('saved_rds/clusters_markers.Rds')
-  conserved_markers_pos <- readRDS('saved_rds/conserved_markers_pos.Rds')
+```{r, fig.height=6, fig.width=8, warning=FALSE}
+map_prediction_facetplot(combined.obj.pbmc,
+                         label_column = 'predicted.celltype.l2', 
+                         score_column = 'predicted.celltype.l2.score',
+                         min_freq = 0.05)
+
+```
+
+```{r}
+mapquery_top_results(combined.obj.pbmc,
+                     label_column = 'predicted.celltype.l2', 
+                     score_column = 'predicted.celltype.l2.score',
+                     top_n = 2) %>%
+  knitr::kable(digits = 3, 
+               col.names = c('Cluster',
+                             'Predicted cell type',
+                             'Median confidence score', 
+                             'Proportion of cluster'),
+               caption = 'Top 2 most common calls for each cluster')
+```
+
+***
+
+# Cluster Markers
+
+We compare cells within a cluster to all other clusters to calculate differential gene expression between clusters. This calculation considers expression variability and detection variability to determine significance. 
+
+```{r find_all_markers, include=FALSE}
+if (preran){
+  clusters.markers <- readRDS("clusters_markers.Rds")
 } else {
-  #clusters.markers <- FindAllMarkers(combined.obj, min.pct = 0.25, logfc.threshold = log2(1.5), assay = 'RNA')
-  # conserved_markers <- lapply(levels(combined.obj$seurat_clusters), function(x) {
-  #   a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
-  #                             logfc.threshold = log2(1.5), min.pct = 0.25)
-  #   a$cluster <- x
-  #   return(a %>% rownames_to_column('Gene'))
-  # })
-  conserved_markers_pos <- lapply(levels(combined.obj$seurat_clusters), function(x) {
-    a <- FindConservedMarkers(combined.obj, assay='RNA', grouping.var = 'orig.ident', ident.1 = x,
-                              logfc.threshold = log2(1.5), min.pct = 0.25, only.pos = TRUE)
-    a$cluster <- x
-    return(a %>% rownames_to_column('Gene'))
-  })
-  #conserved_markers <- bind_rows(conserved_markers)
-  conserved_markers_pos <- bind_rows(conserved_markers_pos)
-  #saveRDS(clusters.markers, "saved_rds/clusters_markers.Rds")
-  saveRDS(conserved_markers_pos, "saved_rds/conserved_markers_pos.Rds")
+  clusters.markers <- data.frame()
+  for (cluster in as.numeric(levels(combined.obj$seurat_clusters))){
+    markers <- FindConservedMarkers(combined.obj,
+                                    ident.1 = cluster,
+                                    grouping.var = 'orig.ident',
+                                    assay = 'RNA',
+                                    min.pct = 0.25,
+                                    logfc.threshold = log2(1.5),
+                                    only.pos = TRUE)
+    if (nrow(markers) > 0 ) {
+      markers$cluster <- cluster
+      clusters.markers <- rbind(clusters.markers, markers)
+    }
+  }
+  # FindAllMarkers(combined.obj, min.pct = 0.25, 
+  #                                    logfc.threshold = log2(1.5),
+  #                                    only.pos = TRUE))
+clusters.markers <- clusters.markers %>% rownames_to_column('gene')
+saveRDS(clusters.markers, "saved_rds/clusters_markers.Rds")
 }
-
-
-
-# for (i in 0:(length(conserved_markers)-1)){
-#   conserved_markers[[i+1]]$cluster <- i
-#   conserved_markers[[i+1]] <- conserved_markers[[i+1]] %>% rownames_to_column('Gene')
-# }
-
+```
+```{r featureplot_top_markers, fig.width=10, fig.height=12}
+# topmarkers <- clusters.markers %>%
+#     group_by(cluster) %>%
+#     top_n(n = 1, wt = avg_log2FC)
+#FeaturePlot(combined.obj, features=topmarkers$gene)
 ```
 
+<!-- Heatmap of the top 5 gene identifiers for each cluster. -->
 
-
-Heatmap of the top 5 gene identifiers for each cluster.
-
-```{r, fig.height=16, fig.width=16}
-conserved_markers_pos$avg_log2FC <- (conserved_markers_pos %>% select(contains('log2FC')) %>% transmute(avg_log2FC=rowMeans(.)))$avg_log2FC
-top10 <- conserved_markers_pos %>%
-    group_by(cluster) %>%
-    top_n(n = 5, wt = abs(avg_log2FC))
-DoHeatmap(combined.obj, features = top10$Gene)
+```{r heatmap_top_markers, fig.height=16, fig.width=16}
+# combined.obj <- ScaleData(combined.obj, features = rownames(combined.obj@assays$RNA), assay = 'RNA')
+# top5 <- clusters.markers %>%
+#     group_by(cluster) %>%
+#     top_n(n = 5, wt = minimump_p_val) 
+# DoHeatmap(combined.obj, features = top5$gene, assay='RNA')
 ```
+
+Table of all markers for all clusters. 
+
+```{r datatable_markers}
+# DT::datatable(clusters.markers %>% mutate_if(is.numeric, ~round(., 4) %>% select(cluster, gene, avg_log2FC, p_val, p_val_adj, pct.1, pct.2)), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold change", "P value", "Adj. p val", "% cluster", "% outside cluster"))
+DT::datatable(clusters.markers %>% mutate_if(is.numeric, ~round(., 4)) %>% dplyr::relocate(cluster, gene, ends_with('log2FC')) %>% dplyr::select(-ends_with('p_val')), filter = 'top', rownames = FALSE)
+```
+
+***
+
+# Tracking known cell-type markers
 
 ```{r}
-datatable(conserved_markers_pos %>% mutate_if(is.numeric, ~round(., 2)) %>% filter(max_pval<0.05) %>% dplyr::select(cluster, Gene, avg_log2FC, max_pval, `LysM-cre_pct.1`, `LysM-cre_pct.2`, `Ptpn11-E76K-pos-LysM-cre_pct.1`, `Ptpn11-E76K-pos-LysM-cre_pct.2`), filter = 'top', rownames = FALSE, colnames=c("Cluster", "Gene", "Mean log2 fold-change across conditions in cluster", "Max Adj. p val", "% detected in\nLysm-cre in cluster", "% detected in Lysm-cre noutside cluster", 
-                            "% detected in Ptpn11-E76K-pos in cluster", "% detected in Ptpn11-E76K-pos outside cluster"              ))
+DotPlot(combined.obj, features=c('PECAM1', 'JAM2', 'PROX1', 'ACTA2', 'CCL19', 'CCL21','CR2', 'DCN', 'SDC1', 'CCR7', 'CD83'), assay = 'RNA')
 ```
 
-Expression in dotplots is scaled
-
-```{r, fig.width=6}
-markers <- read.csv('markers.txt', header=TRUE)
-
-markers[] <- lapply(markers, str_trim)
-markers <- markers %>% filter(!Celltype %in% c('B cells', 'Plasma cells'))
-for (celltype in unique(markers$Celltype)){
-  genes <- markers %>% filter(Celltype==celltype)
-  a <- DotPlot(combined.obj, features=genes$Gene, assay='RNA', col.max = 50) + theme(axis.text.x = element_text(angle = 45, hjust=1))+ ggtitle(celltype)#, col.min = 0, col.max = 5) #+ ggtitle(celltype) #+ theme(axis.text.x = element_text(angle = 45, hjust=1))
-  print(a)
-}
-#DotPlot(combined.obj, features=markers$Gene)+ theme(axis.text.x = element_text(angle = 45, hjust=1))
-```
+***
 
 # Final cluster labels
 

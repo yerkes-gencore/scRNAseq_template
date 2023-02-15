@@ -190,7 +190,7 @@ doublet_finder <- function(obj, pcs, hashed,
 
 
 ## Read GEX data and correct ambient RNA with soupX
-read_counts_soupX <- function(label, file, mito.pattern="^MT-") {
+read_counts_soupX <- function(label, file, mito.pattern="^MT") {
   filtered_data <- Read10X(
     dir(file.path(config$rootDir, config$alignmentDir, file, 'outs'),
         recursive = TRUE, pattern = 'filtered_feature_bc_matrix$',
@@ -277,4 +277,86 @@ add_hash_data <- function(obj, counts, hash_table){
   obj[['HTO']] <- CreateAssayObject(counts=hto_data)
   obj <- NormalizeData(obj, assay='HTO', normalization.method = 'CLR')
   HTODemux(obj, assay='HTO', positive.quantile = 0.99)
+}
+
+## Plot mapquery results and prediction scores, facetted by cluster
+map_prediction_facetplot <- function(obj,
+                                     label_column,
+                                     score_column,
+                                     min_freq = 0,
+                                     ncol = 3,
+                                     n_font_size = 2,
+                                     facet_order = NULL){
+  sample_sizes <- obj@meta.data %>%
+    dplyr::select(seurat_clusters, {{ label_column }}, {{ score_column }}) %>%
+    group_by(seurat_clusters, pick({{ label_column }})) %>% 
+    summarise(n = n(), .groups = 'drop_last') %>% 
+    mutate(freq = n / sum(n)) %>% 
+    filter(freq > min_freq)
+  data <- obj@meta.data %>%
+    dplyr::select(seurat_clusters, {{ label_column }}, {{ score_column }}) 
+  plot_data <- merge(sample_sizes, data, 
+                     by = c('seurat_clusters', label_column),
+                     all.x=TRUE)
+  ggplot(plot_data, aes(x = .data[[ label_column ]],
+                        y = .data[[ score_column ]],
+                        color = .data[[ label_column ]])) +
+    geom_violin(draw_quantiles = c(0.5)) + 
+    geom_jitter(size=0.2, alpha=0.35) +
+    facet_wrap(~factor(seurat_clusters,
+                       levels = if (is.null(facet_order)){sort(unique(seurat_clusters), decreasing = FALSE)} else {facet_order}),
+               ncol = ncol) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) + 
+    geom_text(aes(label=n, y = 0.1), angle = 30, size = n_font_size) + 
+    labs(x='Predicted cell type', color = 'Predicted cell type', 
+         y = 'Prediction score', title='Reference based predictions by cluster',
+         caption = paste0("Lines in violin plots indicate the median.",
+                          "\nNumbers below violins indicate the number of cells in that cluster with that label.", if (min_freq > 0) { 
+                            paste0("\nCalls for less than ",
+                                   min_freq*100, 
+                                   "% of a cluster population are omitted for clarity.")}
+                          else NULL
+         ))
+}
+
+
+## Returns top labels from map query result for each cluster 
+## including  median score and proportion of cluster
+mapquery_top_results <- function(obj, top_n, label_column, score_column){
+  obj@meta.data %>%
+    dplyr::select(seurat_clusters, {{ label_column }}, {{ score_column }}) %>%
+    group_by(seurat_clusters, pick({{ label_column }})) %>% 
+    summarise(median_score = median(.data[[ score_column ]]),
+              n = n(), .groups = 'drop_last') %>% 
+    mutate(freq = n / sum(n)) %>%
+    top_n(2) %>% 
+    dplyr::select(-n) %>% 
+    arrange(seurat_clusters, desc(freq))
+}
+
+## Wrapper for seurat reference mapping functions. Includes UMAP mapping.
+## Use the 'refdata' argument to specify the column with labels in the ref.
+seurat_map_reference <- function(obj, ref, normalization.method = "SCT",
+                                 reference.reduction="pca",
+                                 refdata = list(cell_type = "cell_type"),
+                                 ndims=20){
+  # DefaultAssay(obj) <- 'SCT'
+  anchors <- FindTransferAnchors(
+    reference = ref,
+    query = obj,
+    normalization.method = normalization.method,
+    reference.reduction = reference.reduction,
+    #dims = 1:ndims
+  )
+  
+  obj <- MapQuery(
+    anchorset = anchors,
+    query = obj,
+    reference = ref,
+    refdata = refdata,
+    reference.reduction = "pca",
+    reduction.model = "umap"
+  )
+  obj
 }
