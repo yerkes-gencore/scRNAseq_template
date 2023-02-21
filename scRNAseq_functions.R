@@ -217,7 +217,9 @@ read_counts_soupX <- function(label, file, mito.pattern="^MT") {
   sc <- SoupChannel(tod = unfiltered_data$`Gene Expression`,
                     toc = filtered_data$`Gene Expression`)
   sc <- setClusters(sc, clusters)
+  png(paste0('plots/', label, '_QC3_soupX.png'))
   sc <- autoEstCont(sc)
+  dev.off()
   fixed_counts <- adjustCounts(sc, roundToInt = TRUE)
   compare <- 1- (rowSums(fixed_counts) / rowSums(filtered_data$`Gene Expression`)) 
   count_diff <- data.frame(diff=compare, total=rowSums(filtered_data$`Gene Expression`)) %>%
