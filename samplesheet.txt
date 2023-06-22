@@ -1,3 +1,0 @@
-FileID	Label
-p22091_Peng-s002_Ptpn11-E76K-pos-LysM-cre_GEX	Ptpn11-E76K-pos-LysM-cre
-p22091_Peng-s001_LysM-cre_GEX	LysM-cre

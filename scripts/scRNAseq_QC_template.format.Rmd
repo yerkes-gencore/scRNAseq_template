@@ -1,0 +1,104 @@
+---
+title: 'scRNA QC template'
+author: "ENPRC Genomics Core"
+date: '`r Sys.Date()`'
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 3
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6) 
+
+library(kableExtra)   ## Needed if rendering tables
+```
+
+<!-- This file will not execute by itself. It should be called within the  -->
+<!-- runfile to render the final report. You can arrange figures, add explanations, -->
+<!-- and do other aesthetic tweaks here. -->
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+# Project Description
+
+***
+
+# ADT libraries
+
+[Explanation of metrics](https://support.10xgenomics.com/single-cell-gene-expression/software/pipelines/latest/output/antibody-metrics)
+
+<details open><summary>**Percent Antibody Reads Usable:**</summary>
+
+Reads that contain a recognized antibody barcode, a valid UMI, and a cell-associated barcode.
+
+Ideal > 20%. This may indicate poor library quality for the antibody library, poor sequencing quality, or mistakes while specifying antibody details in the Feature Reference CSV provided to Cell Ranger.
+
+</details>
+
+```{r}
+qc_plot_ADT
+```
+
+```{r}
+knitr::kable(qc_table_ADT) %>%
+  kable_styling(full_width = F)
+```
+
+***
+
+# GEX libraries
+
+```{r}
+qc_plot_GEX
+```
+
+```{r}
+knitr::kable(qc_table_GEX) %>%
+  kable_styling(full_width = F)
+```
+
+***
+
+# VDJ B libraries
+
+## VDJ B
+
+[Explanation of metrics](https://support.10xgenomics.com/single-cell-vdj/software/pipelines/latest/output/metrics)
+
+<details><summary>**Number of Cells With Productive V-J Spanning Pair**</summary>
+
+[Productive Contigs](https://support.10xgenomics.com/single-cell-vdj/software/pipelines/latest/algorithms/annotation#productive)
+
+A contig is termed productive if the following conditions are met:
+
+* **Full length requirement:** The contig matches the initial part of a V gene. The contig continues on, ultimately matching the terminal part of a J gene.
+
+* **Start requirement:** The initial part of the V matches a start codon on the contig. Note that in the human and mouse reference sequences supplied by 10x Genomics, every V segment begins with a start codon.
+
+* **Nonstop requirement:** There is no stop codon between the V start and the J stop.
+
+* **In-frame requirement:** The J stop minus the V start equals one mod three. This just says that the codons on the V and J segments are in frame.
+
+* **CDR3 requirement:** There is an annotated CDR3 sequence.
+
+* **Structure requirement:** Let VJ denote the sum of the lengths of the V and J segments. Let len denote the J stop minus the V start, measured on the contig. Then VJ - len lies between -25 and +25, except for IGH, which must be between -55 and +25. This condition is imposed to preclude anomalous structure changes that are unlikely to correspond to functional proteins.
+</details>
+
+<details><summary>**Paired clonotype diversity**</summary>
+
+Effective diversity of the paired clonotypes, computed as the Inverse Simpson Index of the clonotype frequencies. A value of 1 indicates a minimally diverse sample - only one distinct clonotype was detected. A value equal to the estimated number of cells indicates a maximally diverse sample.
+
+</details>

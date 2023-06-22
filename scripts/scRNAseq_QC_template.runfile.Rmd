@@ -1,0 +1,220 @@
+---
+title: 'scRNA QC template'
+author: "ENPRC Genomics Core"
+date: '`r Sys.Date()`'
+output: html_notebook
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE) 
+
+library(tidyverse)  ## General R logic
+library(here)       ## Easier specification of file locations
+library(yaml)       ## parses config yaml
+```
+
+```{}
+This script performs quality checks on cellranger processed data. It is
+not intended to perform any data manipulation. This should be lightweight,
+but the format file is separated from the runfile for ease of use and 
+manipulating report aesthetics. The runfile (current file) should be ran
+all the way through, with the last step being to render the format file
+based on objects in the environment produced by the runfile. 
+
+This runfile is in a html_notebook format so you can view all the outputs
+in a single HTML if that's useful, but the final report should be 
+the one rendered by the format file into the reports folder (see final chunk).
+```
+
+# Read config files
+```{r}
+## Read config files
+config <- yaml.load_file(here("config/scRNA_GEX_config.yml"))
+samplesheet <- read.table(here('config/samplesheet.txt'), header = TRUE)
+```
+
+# Gather metric files
+
+```{r}
+## This may be moved to package eventually if it seems robust enough
+capture_cellranger_multi_qc_metrics <- function(samplesheet, config){
+  files <- lapply(samplesheet$FileID,
+                  function(x) {read.csv(Sys.glob(file.path(
+                    config$rootDir, config$alignmentDir,
+                    x,"outs/per_sample_outs/",
+                    x,"metrics_summary.csv")))})
+  qc <- data.table::rbindlist(files, use.names=TRUE, fill=TRUE,idcol="ID")
+  qc$ID <- plyr::mapvalues(qc$ID, from=1:length(samplesheet$Label), to=samplesheet$Label)
+  qc
+}
+
+## Use the FileIDs from the samplesheet to find metric files in the
+## cellranger output directory as specified in the config
+qc_metrics <- capture_cellranger_multi_qc_metrics(samplesheet, config) 
+
+## Some additional formatting is applied to complex values
+qc_metrics <- qc_metrics%>%
+  mutate(Metric.Value = readr::parse_number(Metric.Value)) %>%
+  mutate(ID = factor(ID, levels = unique(gtools::mixedsort(ID)))) %>%
+  arrange(ID)
+```
+
+# Render QC summaries
+
+```{}
+Depending on the libraries in your captures, these may not all apply
+```
+
+# ADT libraries
+
+## Plot
+
+```{r, fig.width=10}
+## plots are saved to environment so they can be rendered in the format file
+qc_plot_ADT <- qc_metrics %>%
+  filter(Library.Type == 'Antibody Capture') %>%
+  ## Specify metrics of interest below
+  filter(Metric.Name %in% c('Cells',
+                            'Median UMI counts per cell',
+                            'Fraction antibody reads usable',
+                            'Mean antibody reads usable per cell')) %>%
+  ggplot(aes(x=ID, y=Metric.Value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~Metric.Name,
+               ## you may prefer fixed Y scales depending on what you want to show
+               scales='free_y',
+               ncol=3,
+               labeller = as_labeller(
+                  ## option to rename some metrics to add clarity
+                 c(`Cells` = 'Cells',
+                   `Fraction antibody reads usable` = 'Percent antibody reads usable',
+                   `Mean antibody reads usable per cell` = 'Mean antibody reads usable per cell',
+                   `Median UMI counts per cell` = 'Median UMI counts per cell'))) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'Antibody Capture')
+qc_plot_ADT
+```
+
+## Table
+
+```{r}
+qc_table_ADT <- qc_metrics %>% 
+  filter(Library.Type=='Antibody Capture') %>% 
+  filter(Metric.Name %in% c('Cells',
+                            'Median UMI counts per cell',
+                            'Fraction antibody reads usable',
+                            'Mean antibody reads usable per cell')) %>%
+  select(ID, Metric.Name, Metric.Value) %>% 
+  reshape(idvar="ID",timevar = "Metric.Name", direction='wide') %>%
+  rename_with(~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+qc_table_ADT
+# knitr::kable(qc_table_ADT) %>%
+  # kable_styling(full_width = F)
+```
+
+# GEX libraries
+
+## Plot
+
+```{r, eval=FALSE, fig.width=14, fig.height=6}
+qc_plot_GEX <- qc_metrics %>%
+  filter(Library.Type == 'Gene Expression') %>%
+  # filter(Category == 'Cells') %>%
+  filter(Metric.Name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  ggplot(aes(x=ID, y=Metric.Value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~Metric.Name, 
+               scales='free_y',
+               ncol=2,
+               labeller = labeller(Metric.Name = label_wrap_gen(100))) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'GEX')
+qc_plot_GEX
+```
+
+# Table
+
+```{r}
+qc_table_GEX <- qc_metrics %>% 
+  filter(Library.Type=='Gene Expression') %>% 
+  select(ID, Metric.Name, Metric.Value) %>%
+  filter(Metric.Name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  reshape(idvar="ID",timevar = "Metric.Name", direction='wide') %>%
+  rename_with(~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+qc_table_GEX
+```
+
+# VDJ B libraries
+
+```{}
+VDJ data is not present in the example dataset, so these won't work, but
+you get the idea. Set eval=TRUE if you do have vdj data
+```
+
+
+## Plot
+
+```{r, fig.width=18, fig.height=4, eval=FALSE}
+qc_plot_VDJB <- qc_metrics %>%
+  filter(Library.Type=='VDJ B') %>%
+  # filter(Category == 'Cells') %>%
+  filter(Metric.Name %in% c('Estimated number of cells',
+                            'Cells with productive V-J spanning pair',
+                            'Paired clonotype diversity')) %>%
+  ggplot(aes(x=ID, 
+             y=Metric.Value, 
+             fill=ID)) +
+    geom_col() + 
+    facet_wrap(~ factor(Metric.Name,
+                        levels = c('Estimated number of cells',
+                                 'Cells with productive V-J spanning pair',
+                                 'Paired clonotype diversity')),
+               scales='free_y',
+               ncol=3,
+               labeller = as_labeller(c(
+                 `Estimated number of cells` = 'Estimated number of cells',
+                 `Cells with productive V-J spanning pair` = 'Percent cells with productive V-J spanning pair',
+                 `Paired clonotype diversity` = 'Paired clonotype diversity'))
+               ) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'VDJ B')
+qc_plot_VDJB
+```
+
+## Table
+
+```{r, eval=FALSE}
+qc_table_VDJB <- qc_metrics %>% 
+  filter(Library.Type=='VDJ B') %>%
+  # filter(Category == 'Cells') %>%
+  filter(Metric.Name %in% c('Estimated number of cells',
+                            'Cells with productive V-J spanning pair',
+                            'Paired clonotype diversity')) %>%
+  select(ID, Metric.Name, Metric.Value) %>%
+  filter(Metric.Name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  reshape(idvar="ID",timevar = "Metric.Name", direction='wide') %>%
+  rename_with(~ gsub("Metric.Value.", "", .x, fixed=TRUE))
+qc_table_GEX
+```
+
+# Render report
+
+```{r}
+## This only works if all the variables called in the format file 
+## are in the current environment. Check the format file to tweak
+## aesthetics 
+rmarkdown::render(here('scripts/scRNAseq_QC_template.format.Rmd'),
+                  output_file = 'scRNAseq_QC.html',
+                  output_dir = here('reports'))
+```

@@ -56,6 +56,8 @@ We are collecting FNA samples from rhesus macaques pre and post chimeric influen
 DimPlot(combined.obj, reduction = 'umap', label=TRUE)
 ```
 
+# Reference mapping
+
 ## Tabula sapiens map query
 
 ```{r reference_data, include=FALSE,}

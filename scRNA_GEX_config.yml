@@ -1,7 +1,0 @@
-# Analysis title
-analysis: p22091_Peng_Analysis
-# root dir is base of mounted file system, might change by machine. Include the 
-# path upto the 'runs/' folder. All subsequent paths should be relative to this root
-rootDir: /Volumes/yerkes/genomelab/illumina/runs/ #/yerkes-cifs/runs/
-# cellranger counts output parent folder
-alignmentDir: Analysis/2022_Analyses/p22091_Peng/p22091_Peng_Processing
