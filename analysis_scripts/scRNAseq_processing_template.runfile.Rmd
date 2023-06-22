@@ -1,0 +1,378 @@
+---
+title: "scRNAseq processing template"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+library(Azimuth)
+library(SingleR)
+library(SeuratData)
+library(ggpubr)
+library(BiocParallel)
+## SeuratData::InstallData('pbmc3k')
+#devtools::install_github('yerkes-gencore/gencoreSC', ref = 'integration')
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+```
+
+```{}
+This script is intended to perform single-cell dataset processing prior
+to downstream analysis. This includes removing low quality cells, removing doublets,
+examining ambient RNA contamination, checking cell-cycle effects, demultiplexing
+hashed data, normalizing ADT data, and mapping reference annotations. Ideally,
+the product of this script is a single Seurat object (either merged or integrated)
+that is ready to use for 'analysis' such as differential gene expression,
+cluster labeling, etc.
+
+The workflow in this script relies heavily on the gencoreSC package (see
+https://github.com/yerkes-gencore/gencoreSC for more information). 
+```
+
+# Load configuration
+
+```{r}
+samplesheet <- read.table(here('analysis/bonemarrow/config/p23077_samplesheet.txt'), header=TRUE)
+config <- yaml::yaml.load_file(here("analysis/bonemarrow/config/scRNA_config.yml"))
+```
+
+# soupX
+
+```{r}
+## Finding files for SoupX, could also manually specify
+soupx_files <- lapply(samplesheet$FileID, function(x){
+  findSoupXFiles(file.path(config$rootDir, config$alignmentDir, x))
+})
+names(soupx_files) <- samplesheet$Label
+# Running soupx takes a while
+sc <- lapply(soupx_files, function(x){
+  runSoupX(x[['unfiltered_mat_path']], x[['filtered_mat_path']], x[['clusters_path']])
+})
+
+saveRDS(sc, '/Volumes/genomelab/illumina/runs/Analysis/2023_Analyses/p23077_Julia/p23077_Julia_Analysis/saved_rds/bonemarrow_soupchannels.Rds')
+## always a good idea to reload the saved object to check that it saved ok
+sc <- readRDS(here('analysis/bonemarrow/saved_rds/bonemarrow_soupchannels.Rds'))
+```
+
+```{r}
+extractSoupXContamEst <- function(sc){
+  rho <- sc$fit$rhoEst
+  rho_low <- sc$fit$rhoFWHM[1]
+  rho_high <- sc$fit$rhoFWHM[2]
+  return(list(rho_low = rho_low, rho = rho, rho_high = rho_high))
+}
+soupx_results <- data.table::rbindlist(lapply(sc, extractSoupXContamEst), idcol = 'Sample')
+soupx_results
+```
+
+```{r}
+## The replay plot function bugs with html_notebook,
+## will only show in viewer window if you execute it from console
+## https://github.com/rstudio/rstudio/issues/5648
+## Pulling individual plots to examine possible problem samples
+sc$R1$plot
+sc$R4$plot
+```
+
+```{r}
+## See highly affected genes
+plotSoupXGeneAdjustments(sc$R1, hide_ensembl = TRUE, ens_pattern = '^ENS')
+plotSoupXGeneAdjustments(sc$R4, hide_ensembl = TRUE, ens_pattern = '^ENS')
+```
+
+# Load data
+
+```{}
+depending on the results of soupX, you may decide to use the corrected counts
+instead of the raw counts. In that case you will have to adjust this
+workflow or overwrite the produced Seurat objects' data slots
+```
+
+```{r, include=FALSE}
+objs <- mapply(readCounts10x,
+               samplesheet$Label,
+               file.path(config$rootDir,
+                         config$alignmentDir, 
+                         samplesheet$FileID,
+                         'outs/per_sample_outs/', 
+                         samplesheet$FileID, 
+                         'count/sample_filtered_feature_bc_matrix'),
+               strip.suffix = FALSE,
+               USE.NAMES = TRUE)
+saveRDS(objs, here('analysis/bonemarrow/saved_rds/raw_captures.Rds'))
+## This keeps track of dropped cells etc. through processing steps
+qc_receipts <- list()
+qc_receipts$preprocessing <- lapply(objs, dim)
+```
+
+```{r}
+## Renaming cells with the sample name to avoid conflicts with references, merging etc.
+for (sample in names(objs)){
+  objs[[sample]]@project.name = paste0(sample)
+}
+
+objs <- lapply(objs, function(sample){
+  RenameCells(sample, add.cell.id = sample@project.name)
+})
+```
+
+# Removing low count genes
+
+```{}
+Rather than using the min.cells argument of readCounts10x, I prefer to separate
+this step out. This has the benefit of 1) allowing you to slot in the soupX
+adjusted counts easily and 2) more explicitly seeing the impact of this step
+```
+
+```{r}
+## only genes appearing in at least `min.cells` cells will be kept
+objs <- lapply(objs, filterLowGenes, min.cells = 100, assay = 'RNA', calculate_only = FALSE)
+qc_receipts$remove_low_genes <- lapply(objs, dim)
+```
+
+# Removing low count cells
+
+```{}
+This approach tests filtering cells based on cutoffs, outlier detection, or
+both. Nothing is done to the data initially, so you can decide which filtering
+regime to use. 
+```
+
+```{r}
+## Define your thresholds
+cutoffs <- list(nUMI.max = Inf,
+                nUMI.min = 500,
+                nGene.max = Inf,
+                nGene.min = 250,
+                log10GenesPerUMI.max = Inf,
+                log10GenesPerUMI.min = 0.80,
+                mitoRatio.max = 0.2,
+                mitoRatio.min = 0,
+                riboRatio.max = 0.5,
+                riboRatio.min = 0)
+
+# define the different filtering regimes we want to test
+filtConfig <-
+  list("input" = list(by_outlier=FALSE,
+                      nmads = 4,
+                      by_threshold=FALSE,
+                      cutoffs=cutoffs),
+       "cutoffOnly" = list(by_outlier=FALSE,
+                                nmads = 4,
+                               by_threshold=TRUE,
+                               cutoffs=cutoffs),
+       "outlierOnly" = list(by_outlier=TRUE,
+                                nmads = 4,
+                                by_threshold=FALSE,
+                                cutoffs=cutoffs),
+       "filtBoth" = list(by_outlier=TRUE,
+                         nmads = 4,
+                         by_threshold=TRUE,
+                         cutoffs=cutoffs))
+```
+
+```{r, include=FALSE}
+## Add metadata columns for filtering criteria
+objs <- lapply(objs,
+              addQCmetrics,
+              mito.pattern = "^MT", ## edit patterns as needed
+              ribo.pattern = "^RP[SL]")
+
+for (filtName in names(filtConfig)) {
+  objs <- addQCfilter(objs, 
+              filterName = filtName, 
+              by_threshold = filtConfig[[filtName]]$by_threshold,
+              cutoffs = cutoffs,
+              by_outlier = filtConfig[[filtName]]$by_outlier, 
+              nmads = filtConfig[[filtName]]$nmads)
+}
+```
+
+```{r, message=TRUE, warning=FALSE, fig.width=18, fig.height=15}
+## Generate dashboard plots of filtering regimes
+cell_filtering_plots <- list()
+for (filtName in names(filtConfig)) {
+  cell_filtering_plots[[filtName]] <- plotQCRidgesJoint(objs, 
+                                              filtName=filtName,
+                                              title=filtName, 
+                                              split_by = "capID", 
+                                              color_by ="riboRatio",
+                                              cutoffs = cutoffs,
+                                              facet_colors = TRUE)
+}
+cell_filtering_plots
+```
+
+```{r}
+## choose a filtering regime to use and apply it to the captures
+objs_filt <- lapply(objs, subset, subset = cutoffsOnly)
+rm(objs)
+qc_receipts$qc_filtering <- lapply(objs_filt, dim)
+```
+
+# Check cell cycle
+
+```{r, include=FALSE}
+## i was unable to get the two-object return method working for this function, 
+## so I ran it twice. theoretically you should be able to run it once and get
+## both objects out
+qc_regression_plots <- lapply(objs_filt, checkCC, cc.genes = cc.genes, what2return = 'plot_list')
+objs_filt <- lapply(objs_filt, checkCC, cc.genes = cc.genes, what2return = 'seurat_obj')
+```
+
+```{r, fig.width=30, fig.height=15}
+ggarrange(plotlist = lapply(qc_regression_plots, function(x) x$Phase))
+```
+
+```{}
+We don't do any default correction for cell-cycle as it is a per-study consideration.
+But the relevant metadata is stored with the object if you want to regress it out
+downstream.
+```
+
+# Doublet finding
+
+```{}
+We do however run doublet removal as a default. If you have hashed data,
+you can specify the ground_truth argument of runDoubletFinder.
+```
+
+
+```{r, include=FALSE}
+## TODO: replace this with the gencoreSC findNormScaleVarFeatures
+objs_filt <- lapply(objs_filt, function(x){
+  x <- NormalizeData(x)
+  x <- FindVariableFeatures(x, selection.method = 'vst', nfeatures = 2000)
+  x <- ScaleData(x)
+  x <- RunPCA(x)
+})
+```
+
+```{r}
+objs_filt <- lapply(objs_filt, runDoubletFinder, 
+                    PCs = 30,
+                    sct = FALSE,
+                    cores = 4) ## adjust for your machine
+```
+
+```{r}
+doubletfinder_results <- data.table::rbindlist(
+  lapply(objs_filt, function(x) {
+    as.list(table(x$DF_classifications))
+  }), idcol = 'Sample')
+doubletfinder_results %>%
+  knitr::kable()
+```
+
+```{r}
+objs_filt <- lapply(objs_filt, removeDFDoublets)
+qc_receipts$doublet_removal <- lapply(objs_filt, dim)
+```
+
+```{r}
+saveRDS(objs_filt, here('saved_rds/objs_filt.Rds'))
+objs_filt <- readRDS(here('saved_rds/objs_filt.Rds'))
+```
+
+# Reference mapping
+
+```{}
+Somewhat TBD if this belongs in the processing step, it's long but pretty easy
+to run this way so I'd like to have it done prior to the 'analysis' so that
+object is stable. 
+```
+
+
+```{r}
+objs_filt_mapped <- lapply(objs_filt, 
+                    RunAzimuth,
+                    reference = 'bonemarrowref', ## A seurat/Azimuth reference dataset
+                    umap.name = 'refUMAP.bm')    ## name for reference UMAP added to query data
+for (obj in names(objs_filt_mapped)){
+  DefaultAssay(objs_filt_mapped[[obj]]) <- 'RNA' 
+}
+rm(objs_filt) 
+gc()
+```
+
+```{r}
+saveRDS(objs_filt_mapped, here('saved_rds/objs_filt_mapped.Rds'))
+objs_filt_mapped <- readRDS(here('saved_rds/objs_filt_mapped.Rds'))
+```
+
+## Plotting mapping results
+
+```{r}
+##devtools::install_github('satijalab/seurat-data')
+bm.ref <- LoadData('bonemarrowref.SeuratData', type = 'azimuth')
+```
+
+```{r, fig.width=15, fig.height=7, warning = FALSE, results='hide', fig.keep='all'}
+
+p1 <- DimPlot(bm.ref$map,
+              reduction = "refUMAP",    ## This will be specific to the reference
+              group.by = "celltype.l2", ## This will be specific to the reference
+              label = TRUE,
+              label.size = 3,
+              raster = FALSE) +
+  NoLegend() + ggtitle("Reference annotations")
+p2 <- DimPlot(objs_filt_mapped$R1,
+              reduction = "refUMAP.bm",           ## umap.name used in RunAzimuth
+              group.by = "predicted.celltype.l2", ## This will be specific to the reference
+              label = TRUE, 
+              label.size = 3, 
+              repel = TRUE) + 
+  NoLegend() + ggtitle("Query transferred labels")
+p1 + p2
+```
+
+# QC filtering summary
+
+```{}
+TODO: this is not very generalized yet, may need tweaking for your data
+```
+
+
+```{r}
+qc_filtering_summary <- data.table::rbindlist(qc_receipts)[c(2,6),]
+qc_filtering_summary <- as.data.frame(t(rbind(qc_filtering_summary, t(doubletfinder_results$Singlet), use.names = FALSE)))
+colnames(qc_filtering_summary) <- c('initial', 'post_filtering', 'after_doublets')
+qc_filtering_summary <- qc_filtering_summary %>% 
+  mutate(low_qual_cells = initial - post_filtering) %>%
+  mutate(doublets = post_filtering - after_doublets) %>%
+  select(low_qual_cells, doublets, after_doublets)
+
+```
+
+```{r, fig.width=8}
+reshape2::melt(as.matrix(qc_filtering_summary)) %>%
+  ggplot(aes(x = Var1,
+             y = value,
+             group = Var2,
+             fill = Var2)) + 
+  geom_col() +
+  theme_bw() + 
+  labs(x = 'Sample', y = 'Cell count', fill = NULL) +
+  scale_fill_manual(values = c('low_qual_cells' = 'grey',
+                               'doublets' = 'goldenrod',
+                               'after_doublets' = 'darkgreen'),
+                    labels = c('Low quality cells',
+                               'Doublets',
+                               'High quality cells')) +
+  scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
+```
+
+# Capture level clustering, UMAPS
+
+**TODO**
+
+# ADT Processing
+
+**TODO**
