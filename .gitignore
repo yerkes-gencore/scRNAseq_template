@@ -1,14 +1,18 @@
 # Template specific
+## You may want to add these folders to an actual working project, but
+## they are left out of the template to preserve the directory structure
 #reports/*
 #plots/*
 #saved_rds/*
+#reference/*
 **.html
 **.utf8.md
 **.knit.md
-reference/*
 **.Rds
 **.rds
 **.png
+**.pdf
+*.Rproj
 
 # History files
 .Rhistory
