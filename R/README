@@ -1,2 +1,5 @@
 Store accessory functions here (e.g. things that haven't been added to the
 package but would make the analysis scripts less readable)
+
+None of the current files in here are necessary for running the analysis scripts, 
+I just haven't deleted them from main as we haven't set good dev repos yet
