@@ -43,7 +43,9 @@ samplesheet <- read.table(here('analysis/bonemarrow/config/p23077_samplesheet.tx
 config <- yaml::yaml.load_file(here("analysis/bonemarrow/config/scRNA_config.yml"))
 ```
 
-# soupX
+# GEX processing
+
+## soupX
 
 ```{r}
 ## Finding files for SoupX, could also manually specify
@@ -87,7 +89,7 @@ plotSoupXGeneAdjustments(sc$R1, hide_ensembl = TRUE, ens_pattern = '^ENS')
 plotSoupXGeneAdjustments(sc$R4, hide_ensembl = TRUE, ens_pattern = '^ENS')
 ```
 
-# Load data
+## Load data
 
 ```{}
 depending on the results of soupX, you may decide to use the corrected counts
@@ -123,7 +125,7 @@ objs <- lapply(objs, function(sample){
 })
 ```
 
-# Removing low count genes
+## Removing low count genes
 
 ```{}
 Rather than using the min.cells argument of readCounts10x, I prefer to separate
@@ -137,7 +139,7 @@ objs <- lapply(objs, filterLowGenes, min.cells = 100, assay = 'RNA', calculate_o
 qc_receipts$remove_low_genes <- lapply(objs, dim)
 ```
 
-# Removing low count cells
+## Removing low count cells
 
 ```{}
 This approach tests filtering cells based on cutoffs, outlier detection, or
@@ -217,7 +219,7 @@ rm(objs)
 qc_receipts$qc_filtering <- lapply(objs_filt, dim)
 ```
 
-# Check cell cycle
+## Check cell cycle
 
 ```{r, include=FALSE}
 ## i was unable to get the two-object return method working for this function, 
@@ -237,7 +239,7 @@ But the relevant metadata is stored with the object if you want to regress it ou
 downstream.
 ```
 
-# Doublet finding
+## Doublet finding
 
 ```{}
 We do however run doublet removal as a default. If you have hashed data,
@@ -281,7 +283,7 @@ saveRDS(objs_filt, here('saved_rds/objs_filt.Rds'))
 objs_filt <- readRDS(here('saved_rds/objs_filt.Rds'))
 ```
 
-# Reference mapping
+## Reference mapping
 
 ```{}
 Somewhat TBD if this belongs in the processing step, it's long but pretty easy
@@ -307,7 +309,7 @@ saveRDS(objs_filt_mapped, here('saved_rds/objs_filt_mapped.Rds'))
 objs_filt_mapped <- readRDS(here('saved_rds/objs_filt_mapped.Rds'))
 ```
 
-## Plotting mapping results
+### Plotting mapping results
 
 ```{r}
 ##devtools::install_github('satijalab/seurat-data')
@@ -333,7 +335,7 @@ p2 <- DimPlot(objs_filt_mapped$R1,
 p1 + p2
 ```
 
-# QC filtering summary
+## QC filtering summary
 
 ```{}
 TODO: this is not very generalized yet, may need tweaking for your data
@@ -369,10 +371,155 @@ reshape2::melt(as.matrix(qc_filtering_summary)) %>%
   scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
 ```
 
-# Capture level clustering, UMAPS
+## Clustering
 
-**TODO**
+```{r}
+## you could specify dimensions per capture, or you could just proceed
+## with a single dim number for all captures.
+## Still working out if it's necessary to be this selective
+lapply(objs_filt_mapped, ElbowPlot)
+ndims <- list(1:16,1:18,1:16,1:15,1:16,
+           1:13,1:10,1:12,1:15,1:16,
+           1:15,1:17,1:12,1:15,1:15,
+           1:13,1:16,1:15,1:12,1:16,1:12)
+```
+
+
+```{r}
+objs_filt_mapped <- mapply(FindNeighbors,
+                           objs_filt_mapped,
+                           dims = ndims, 
+                           reduction = 'pca')
+objs_filt_mapped <- mapply(RunUMAP,
+                           objs_filt_mapped,
+                           dims = ndims,
+                           assay = 'RNA',
+                           reduction.name = 'GEX_UMAP')
+objs_filt_mapped <- lapply(objs_filt_mapped, FindClusters)
+```
+
+### Capture level metadata clustering
+
+```{}
+This hasn't been super robustly tested, so this might not work out of the box.
+The idea here is to plot metadata such as phase, mito ratio, etc on the 
+capture-level clusters to identify possible problematic groupings of cells
+```
+
+
+```{r}
+bm.umaps.rna <- list()
+bm.umaps.rna[["clusters"]] <- plot.umap.split(objs_filt_mapped,
+                                              group.by = "seurat_clusters",
+                                              label.size=0,
+                                              reduction = 'GEX_UMAP')
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
+bm.umaps.rna[["doublets"]] <- objs_filt_mapped %>%
+  lapply(., function(x) {
+    x@meta.data <- x@meta.data %>% mutate(doublets = DF_classifications)
+    x
+    }) %>%
+  plot.umap.split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
+
+ggarrange(plotlist = bm.umaps.rna[["doublets"]], ncol=6, nrow=6, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
+bm.umaps.rna[["Phase"]] <- objs_filt_mapped %>%
+  plot.umap.split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
+
+ggarrange(plotlist = bm.umaps.rna[["Phase"]], ncol=6, nrow=6, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```
 
 # ADT Processing
 
-**TODO**
+```{}
+This whole section has not super robustly tested, losing steam on updating the template
+```
+
+
+```{r}
+objs_filt_mapped <- lapply(objs_filt_mapped,
+                           NormalizeData,
+                           assay = "ADT",
+                           normalization.method = "CLR", 
+                           margin = 2)
+
+# cluster and run umap
+objs_filt_mapped <- lapply(objs_filt_mapped, function(x) {
+  DefaultAssay(x) <- "ADT"
+  prots <- x@assays$ADT@counts %>% rownames()
+  x <- x %>% 
+    Seurat::FindNeighbors(dims = NULL,
+                          features = prots,
+                          k.param = 20,
+                          verbose = FALSE) %>%
+    Seurat::FindClusters(graph.name = "ADT_snn",
+                         resolution = 0.8,
+                         verbose = FALSE) %>%
+    Seurat::RunUMAP(features = prots, 
+                    verbose = FALSE,
+                    reduction.name = 'ADT_UMAP')
+})
+```
+
+## UMAPs of ADT expression
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=18}
+adt_umaps <- plot.umap.split(objs_filt_mapped,
+                             group.by = "seurat_clusters",
+                             label.size=0,
+                             plot_smaller = T,
+                             reduction = 'ADT_UMAP')
+
+ggarrange(plotlist = adt_umaps, ncol = 4, nrow = 6) 
+
+```
+
+## Heatmaps comparing clusters to ADT expression
+
+```{r}
+heatmapClusterADT <- function(x,
+                              title = x@project.name, 
+                              silent = TRUE) {
+  prots <- x@assays$ADT@counts %>% rownames()
+  adt_plot <- cbind(x@meta.data, as.data.frame(t(x@assays$ADT@data))) %>%
+    dplyr::group_by(seurat_clusters) %>%
+    dplyr::summarize_at(.vars = prots, .funs = median) %>%
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames("seurat_clusters") 
+  
+  pheatmap::pheatmap(t(adt_plot),
+                     color = viridis::viridis(25, option = "B"),
+                     fonstize_row = 8, border_color = NA, silent = silent,
+                     legend = FALSE, treeheight_row = 10, treeheight_col = 10,
+                     fontsize_row = 4, fontsize_col = 6, main = title) %>% 
+    ggplotify::as.ggplot()
+}
+```
+
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=20}
+
+# adt_heatmaps <- lapply(objs_filt_mapped[-7], function(x) {
+#   heatmapClusterADT(x, title = '')
+# })
+
+adt_heatmaps <- lapply(
+  seq_along(objs_filt_mapped),
+  function(i, x=objs_filt_mapped) {
+    heatmapClusterADT(objs_filt_mapped[[i]], title = names(objs_filt_mapped)[[i]])
+})
+```
+
+
+```{r, fig.width=12, fig.height=20}
+#adt_heatmaps
+ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=6) %>%
+  annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
