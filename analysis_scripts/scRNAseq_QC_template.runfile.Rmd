@@ -26,6 +26,9 @@ based on objects in the environment produced by the runfile.
 This runfile is in a html_notebook format so you can view all the outputs
 in a single HTML if that's useful, but the final report should be 
 the one rendered by the format file into the reports folder (see final chunk).
+
+You may have to adjust some filter/select functions here, as cellranger seems
+to change their output naming conventions frequently. 
 ```
 
 # Read config files
