@@ -1,0 +1,3 @@
+Store generated images, datatables, and other stable outputs here. When possible
+you should try to save out the data used to generate each figure, in case
+the figure is used in publication and exact numbers are needed.

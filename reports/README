@@ -1,0 +1,4 @@
+Store finalized reports here. When a report is sent to a collaborator, save a 
+copy of the report with the date sent included in the filename in MMM_DD-YYYY 
+format. Filenames should also include the project number E.g. 
+'p23077_QC_Jun21-2023.html'
