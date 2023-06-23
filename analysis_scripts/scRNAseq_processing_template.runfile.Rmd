@@ -239,6 +239,25 @@ But the relevant metadata is stored with the object if you want to regress it ou
 downstream.
 ```
 
+## Hash demultiplexing
+
+```{}
+Not needed for all studies
+```
+
+```{r}
+HTO_table <- read.csv(here('config/HTO_table.csv')) %>%
+  mutate(Hashtag = paste0('Hash', substr(Hashtag, 9, 10))) %>%
+  column_to_rownames('Sample')
+## Labels need to be a named list
+HTO_labels <- setNames(rownames(HTO_table), HTO_table$Hashtag)
+```
+
+```{r}
+objs_filt <- lapply(objs_filt, demuxAntibodyData, labels = HTO_labels, assay = 'ADT')
+```
+
+
 ## Doublet finding
 
 ```{}
@@ -248,13 +267,8 @@ you can specify the ground_truth argument of runDoubletFinder.
 
 
 ```{r, include=FALSE}
-## TODO: replace this with the gencoreSC findNormScaleVarFeatures
-objs_filt <- lapply(objs_filt, function(x){
-  x <- NormalizeData(x)
-  x <- FindVariableFeatures(x, selection.method = 'vst', nfeatures = 2000)
-  x <- ScaleData(x)
-  x <- RunPCA(x)
-})
+objs_filt <- lapply(objs_filt, NormFindVarFeatScaleData, norm_method = 'logNorm')
+objs_filt <- lapply(objs_filt, RunPCA)
 ```
 
 ```{r}
