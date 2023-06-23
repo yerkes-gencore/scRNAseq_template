@@ -1,4 +1,5 @@
 install.packages(c('remotes'))
+install.packages(c('ggh4x')) ## for threshold filtering plots
 remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
 remotes::install_github('yerkes-gencore/gencoreSC')
 

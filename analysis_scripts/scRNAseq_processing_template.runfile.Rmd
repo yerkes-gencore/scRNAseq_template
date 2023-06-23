@@ -257,7 +257,6 @@ HTO_labels <- setNames(rownames(HTO_table), HTO_table$Hashtag)
 objs_filt <- lapply(objs_filt, demuxAntibodyData, labels = HTO_labels, assay = 'ADT')
 ```
 
-
 ## Doublet finding
 
 ```{}
