@@ -39,8 +39,8 @@ https://github.com/yerkes-gencore/gencoreSC for more information).
 # Load configuration
 
 ```{r}
-samplesheet <- read.table(here('analysis/bonemarrow/config/p23077_samplesheet.txt'), header=TRUE)
-config <- yaml::yaml.load_file(here("analysis/bonemarrow/config/scRNA_config.yml"))
+samplesheet <- read.table(here('config/samplesheet.txt'), header=TRUE)
+config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
 ```
 
 # GEX processing
@@ -58,9 +58,9 @@ sc <- lapply(soupx_files, function(x){
   runSoupX(x[['unfiltered_mat_path']], x[['filtered_mat_path']], x[['clusters_path']])
 })
 
-saveRDS(sc, '/Volumes/genomelab/illumina/runs/Analysis/2023_Analyses/p23077_Julia/p23077_Julia_Analysis/saved_rds/bonemarrow_soupchannels.Rds')
+saveRDS(sc, here('saved_rds/soupx_results.Rds'))
 ## always a good idea to reload the saved object to check that it saved ok
-sc <- readRDS(here('analysis/bonemarrow/saved_rds/bonemarrow_soupchannels.Rds'))
+sc <- readRDS(here('saved_rds/soupx_results.Rds'))
 ```
 
 ```{r}
