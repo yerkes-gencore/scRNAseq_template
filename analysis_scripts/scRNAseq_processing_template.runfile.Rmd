@@ -262,6 +262,9 @@ objs_filt <- lapply(objs_filt, demuxAntibodyData, labels = HTO_labels, assay = '
 ```{}
 We do however run doublet removal as a default. If you have hashed data,
 you can specify the ground_truth argument of runDoubletFinder.
+
+Or maybe it shouldn't be the default? And you should map the data on the cluster
+level umaps to make a decision? TBD
 ```
 
 
@@ -350,24 +353,20 @@ p1 + p2
 
 ## QC filtering summary
 
-```{}
-TODO: this is not very generalized yet, may need tweaking for your data
-```
-
-
 ```{r}
-qc_filtering_summary <- data.table::rbindlist(qc_receipts)[c(2,6),]
-qc_filtering_summary <- as.data.frame(t(rbind(qc_filtering_summary, t(doubletfinder_results$Singlet), use.names = FALSE)))
-colnames(qc_filtering_summary) <- c('initial', 'post_filtering', 'after_doublets')
+qc_filtering_summary <- as.data.frame(t(data.table::rbindlist(qc_receipts)[c(2,6,8,10),]))
+# qc_filtering_summary <- as.data.frame(t(rbind(qc_filtering_summary, use.names = FALSE)))
+colnames(qc_filtering_summary) <- c('Initial', 'post_filtering', 'after_DF', 'final')
 qc_filtering_summary <- qc_filtering_summary %>% 
-  mutate(low_qual_cells = initial - post_filtering) %>%
-  mutate(doublets = post_filtering - after_doublets) %>%
-  select(low_qual_cells, doublets, after_doublets)
+  mutate(low_qual_cells = Initial - post_filtering) %>%
+  mutate(bad_gems = post_filtering - final) %>%
+  # mutate(HTO_doublets = after_DF - final) %>%
+  dplyr::select(low_qual_cells, bad_gems, final)
 
 ```
 
 ```{r, fig.width=8}
-reshape2::melt(as.matrix(qc_filtering_summary)) %>%
+qc_filtering_results_plot <- reshape2::melt(as.matrix(qc_filtering_summary)) %>%
   ggplot(aes(x = Var1,
              y = value,
              group = Var2,
@@ -375,13 +374,15 @@ reshape2::melt(as.matrix(qc_filtering_summary)) %>%
   geom_col() +
   theme_bw() + 
   labs(x = 'Sample', y = 'Cell count', fill = NULL) +
-  scale_fill_manual(values = c('low_qual_cells' = 'grey',
-                               'doublets' = 'goldenrod',
-                               'after_doublets' = 'darkgreen'),
+  scale_fill_manual(values = c('low_qual_cells' = 'darkred',
+                               'bad_gems' = 'goldenrod',
+                               # 'HTO_doublets' = 'orange',
+                               'final' = 'darkgreen'),
                     labels = c('Low quality cells',
-                               'Doublets',
-                               'High quality cells')) +
-  scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
+                               'Bad GEMs',
+                               # 'HTO Doublets',
+                               'High quality cells')) #+
+  # scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
 ```
 
 ## Clustering
