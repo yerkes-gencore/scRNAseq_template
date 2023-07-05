@@ -5,6 +5,6 @@ in the top right to make a new repo from this template. Many of the folders are 
 to set a constant directory structure across projects.
 
 # Todo:
-* Add format file for processing
+* Generalize runfile for processing (mostly taken from an analysis, not robustly tested)
 * Test and clean clustering and ADT portions of processing runfile
 * Add analysis scripts (DGE, cluster labeling, etc)
