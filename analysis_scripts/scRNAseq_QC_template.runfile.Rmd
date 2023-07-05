@@ -2,7 +2,7 @@
 title: 'scRNA QC template'
 author: "ENPRC Genomics Core"
 date: '`r Sys.Date()`'
-output: html_notebook
+output: html_document
 ---
 
 ```{r, include=FALSE}
