@@ -1,0 +1,265 @@
+---
+title: "scRNAseq processing template"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+library(kableExtra)
+```
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+# GEX processing
+
+All processing is done on a capture level. We performed standard
+filtering on cells based on mitochondrial and ribosomal gene expression,
+umis, and gene count. We've also calculated metrics for ambient RNA
+contamination and cell-cycle separation without performing
+any correction for them. Finally we perform a doublet detection to identify
+GEMs with more than 1 cell. These may affect the quality and quantity of
+data used for analysis downstream, so we want to discuss whether to
+perform the corrections.
+
+## soupX
+
+<details>
+
+<summary>What is ambient RNA?</summary>
+
+"In droplet based, single cell RNA-seq experiments, there is always a
+certain amount of background mRNAs present in the dilution that gets
+distributed into the droplets with cells and sequenced along with them.
+The net effect of this is to produce a background contamination that
+represents expression not from the cell contained within a droplet, but
+the solution that contained the cells.
+
+This collection of cell free mRNAs floating in the input solution
+(henceforth referred to as "the soup") is created from cells in the
+input solution being lysed. Because of this, the soup looks different
+for each input solution and strongly resembles the expression pattern
+obtained by summing all the individual cells." [taken from SoupX
+vignette](https://rawcdn.githack.com/constantAmateur/SoupX/204b602418df12e9fdb4b68775a8b486c6504fe4/inst/doc/pbmcTutorial.html)
+
+Removing ambient RNA can clean input counts, but does represent a
+somewhat 'unsupervised' curration of the data that is a bit of a black
+box.
+
+[Further
+reading](https://academic.oup.com/gigascience/article/9/12/giaa151/6049831)
+
+</details>
+
+```{r}
+knitr::kable(soupx_results,
+             col.names = c('Sample',
+                           'Lower estimate',
+                           'Contamination portion',
+                           'Upper estimate'),
+             caption = 'portion of 0.01 = 1% contamination')  %>%
+  kable_styling(full_width = F)
+```
+
+## Removing low count cells {.tabset}
+
+The plots on the left include the threshold (vertical black line) used
+to filter cells for analysis. The plots on the right of nGene vs nUMI
+show the distribution of cell complexity in a capture with a simple
+best-fit line to show the general trend.
+
+Explanation of metrics:
+
+-   **nUMI:** Number of unique transcripts
+-   **nGene:** Number of genes with detected transcripts
+-   **Log10GenesPerUmi:** $log10(nGene)/log10(nUMI)$ A proxy for diversity of expression across genes (i.e. "complexity score"). Low complexity cells (e.g. red blood cells) have expression dominated by only a few genes.
+-   **mitoRatio:** Proportion of reads coming from mitochondrial genes.
+    High mitochondrial portion often indicates low quality or dying
+    cells.
+-   **riboRatio:** Proportion of reads coming from ribosomal genes. High
+    riboRatio may suggest degradation of mRNA.
+
+### Before
+
+```{r, fig.width=18, fig.height=15}
+cell_filtering_plots$input
+```
+
+### After {.active}
+
+```{r, fig.width=18, fig.height=15}
+cell_filtering_plots$outlierOnly
+```
+
+## Check cell cycle
+
+<details>
+
+<summary>What are cell-cycle effects?</summary>
+
+Cells at different stages of growth can exhibit unique expression
+profiles. For some studies, detecting signal between cells of different
+stages in not interesting and can confound or obscure results of
+interest. A set of cell-cycle marker genes can be used to approximate
+growth stage and regress expression data to ignore variance due to cell
+cycle.
+
+Note that this is probably not a desirable outcome for studies focusing
+on cell differentiation or other inquiries related to cell growth &
+cycling.
+
+[Further
+reading](https://github.com/hbctraining/scRNA-seq_online/blob/master/lessons/cell_cycle_scoring.md)
+
+</details>
+
+We plot cells using cell-cycle markers to define principle components
+and look for cells clustering by estimated CC stage.
+
+```{r, fig.width=30, fig.height=15}
+ggarrange(plotlist = lapply(qc_regression_plots, function(x) x$Phase))
+```
+
+## Hash demultiplexing
+
+```{r}
+hto_demux_results
+```
+
+## Doublet detection
+
+<details>
+
+<summary>What are doublets?</summary>
+
+Most single-cell technologies are imperfect at isolating a single-cells.
+It is not impossible to have 2 or more cells in the same GEM or well,
+where each cell would be tagged with the same barcode. After sequencing,
+the shared barcode makes all reads appear to have come from one cell.
+This has various negative effects, including obscuring real signal.
+
+Sometimes, real 'biological' doublets can occur with two cells in close
+contact. If these are of interest to your study, we may want to consider
+not removing doublets.
+
+[Further
+reading](https://www.cell.com/cell-systems/fulltext/S2405-4712(19)30073-0)
+
+</details>
+
+```{r}
+doubletfinder_results %>% knitr::kable()
+```
+
+
+## QC filtering summary
+
+Showing the result 
+
+```{r, fig.width=8}
+qc_filtering_results_plot
+```
+
+
+## Reference mapping {.tabset}
+
+Here we predict cell-types using external reference datasets. In this case,
+a human lymph node atlas was used, so it may not be the most accurate, but
+it can serve as a good starting point for initial identification. These
+predictions will be validated with marker genes and surface markers.
+
+### Top level annotations
+
+```{r, fig.width=14}
+azimuth_plot_lvl1
+```
+
+### More granular predictions
+
+```{r, fig.width=14}
+azimuth_plot_lvl2
+```
+
+## Capture level metadata clustering {.tabset}
+
+Reviewing some data on a per-capture basis and the natural clustering of each
+capture prior to integration to inspect for any irregularities. 
+
+### Natural clustering
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
+ggarrange(plotlist = umaps.rna[["clusters"]], ncol=4, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Seurat clusters", face = "bold", size = 14))
+```
+
+### Phase
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
+ggarrange(plotlist = umaps.rna[["Phase"]], ncol=4, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```
+
+### Reference annotations (top level)
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
+ggarrange(plotlist = umaps.rna[["predicted.cell_type_lvl1"]], ncol=4, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```
+
+### Reference annotations (granular)
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
+ggarrange(plotlist = umaps.rna[["predicted.cell_type_lvl2"]], ncol=4, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```
+
+# ADT Processing
+
+Natural clustering of ADT data with GEX based cluster labels superimposed.
+We see capture 11 has poor ADT data.
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
+ggarrange(plotlist = adt_umaps, ncol = 4, nrow = 3) 
+
+```
+
+## Heatmaps comparing GEX clusters to ADT expression
+
+Now a rough look at how the ADT expression lines up with the natural GEX clusters.
+
+```{r, fig.width=12, fig.height=10}
+#adt_heatmaps
+ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=3) %>%
+  annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
+
+# Integration
+
+Integrating across capture and individual (based on hashing)
+
+```{r, fig.height = 16, fig.width = 16}
+integration_diagnostic_plots
+```
+
