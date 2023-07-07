@@ -1,8 +1,5 @@
-# Analysis title
-analysis: p22090_Tiffany_Analysis
-# root dir is base of mounted file system, might change by machine. Include the 
+# root dir is base of mounted file system, might change by machine. Include the
 # path upto the 'runs/' folder. All subsequent paths should be relative to this root
 rootDir: /Volumes/yerkes/genomelab/illumina/runs/ #/yerkes-cifs/runs/
 # cellranger counts output parent folder
 alignmentDir: Analysis/2022_Analyses/p22090_Tiffany/p22090_Tiffany_Processing
-description: "We are collecting FNA samples from rhesus macaques pre and post chimeric influenza vaccination. We aim to identify the subsets of dendritic cells and monocytes being trafficked to the lymph node post cH5 mRNA immunization."
