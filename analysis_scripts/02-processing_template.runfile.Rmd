@@ -108,7 +108,7 @@ objs <- mapply(readCounts10x,
                          'count/sample_filtered_feature_bc_matrix'),
                strip.suffix = FALSE,
                USE.NAMES = TRUE)
-saveRDS(objs, here('analysis/bonemarrow/saved_rds/raw_captures.Rds'))
+saveRDS(objs, here('saved_rds/raw_captures.Rds'))
 ## This keeps track of dropped cells etc. through processing steps
 qc_receipts <- list()
 qc_receipts$preprocessing <- lapply(objs, dim)
@@ -290,6 +290,7 @@ doubletfinder_results %>%
 ```
 
 ```{r}
+## This will remove doublets
 objs_filt <- lapply(objs_filt, removeDFDoublets)
 qc_receipts$doublet_removal <- lapply(objs_filt, dim)
 ```
@@ -307,6 +308,13 @@ to run this way so I'd like to have it done prior to the 'analysis' so that
 object is stable. 
 ```
 
+### Azimuth
+
+```{}
+Azimuth has lots of dependencies and can be harder to use, you may
+prefer to use singleR instead
+```
+
 
 ```{r}
 objs_filt_mapped <- lapply(objs_filt, 
@@ -320,12 +328,7 @@ rm(objs_filt)
 gc()
 ```
 
-```{r}
-saveRDS(objs_filt_mapped, here('saved_rds/objs_filt_mapped.Rds'))
-objs_filt_mapped <- readRDS(here('saved_rds/objs_filt_mapped.Rds'))
-```
-
-### Plotting mapping results
+#### Plotting mapping results
 
 ```{r}
 ##devtools::install_github('satijalab/seurat-data')
@@ -349,6 +352,40 @@ p2 <- DimPlot(objs_filt_mapped$R1,
               repel = TRUE) + 
   NoLegend() + ggtitle("Query transferred labels")
 p1 + p2
+```
+
+### SingleR
+
+```{r}
+## Load a reference dataset in
+ln_ref_data <- SeuratDisk::LoadH5Seurat('/yerkes-cifs/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
+
+## SingleR can work on merged object, or lapply over captures
+# objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
+singleR_results <- lapply(objs_filt, runSingleR,
+                               ref = ln_ref_data_SingleR,
+                               labels = ln_ref_data_SingleR.labels,
+                               meta.prefix = 'singleR')
+## Output is lists of 2 sets of data: the singleR results, and
+## the seurat objects with metadata added
+for (cap in names(singleR_results)){
+  objs_filt[[cap]] <- singleR_results[[cap]][[1]]
+  singleR_results[[cap]] <- singleR_results[[cap]][[2]]
+}
+```
+
+#### Plotting mapping results
+
+```{r, fig.width=14}
+singleR_heatmap <- plotScoreHeatmap(singleR_results$Cap1)
+singleR_heatmap
+```
+
+### save object post-mapping
+
+```{r}
+saveRDS(objs_filt_mapped, here('saved_rds/objs_filt_mapped.Rds'))
+objs_filt_mapped <- readRDS(here('saved_rds/objs_filt_mapped.Rds'))
 ```
 
 ## QC filtering summary
@@ -422,31 +459,31 @@ capture-level clusters to identify possible problematic groupings of cells
 
 
 ```{r}
-bm.umaps.rna <- list()
-bm.umaps.rna[["clusters"]] <- plot.umap.split(objs_filt_mapped,
+umpas.rna <- list()
+umpas.rna[["clusters"]] <- plotUMAP_split(objs_filt_mapped,
                                               group.by = "seurat_clusters",
                                               label.size=0,
                                               reduction = 'GEX_UMAP')
 ```
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-bm.umaps.rna[["doublets"]] <- objs_filt_mapped %>%
+umaps.rna[["doublets"]] <- objs_filt_mapped %>%
   lapply(., function(x) {
     x@meta.data <- x@meta.data %>% mutate(doublets = DF_classifications)
     x
     }) %>%
-  plot.umap.split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
+  plotUMAP_split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-ggarrange(plotlist = bm.umaps.rna[["doublets"]], ncol=6, nrow=6, 
+ggarrange(plotlist = umpas.rna[["doublets"]], ncol=6, nrow=6, 
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
 ```
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-bm.umaps.rna[["Phase"]] <- objs_filt_mapped %>%
-  plot.umap.split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
+umpas.rna[["Phase"]] <- objs_filt_mapped %>%
+  plotUMAP_split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-ggarrange(plotlist = bm.umaps.rna[["Phase"]], ncol=6, nrow=6, 
+ggarrange(plotlist = umpas.rna[["Phase"]], ncol=6, nrow=6, 
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
 ```
@@ -485,7 +522,7 @@ objs_filt_mapped <- lapply(objs_filt_mapped, function(x) {
 
 ## UMAPs of ADT expression
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=18}
-adt_umaps <- plot.umap.split(objs_filt_mapped,
+adt_umaps <- plotUMAP_split(objs_filt_mapped,
                              group.by = "seurat_clusters",
                              label.size=0,
                              plot_smaller = T,
@@ -536,4 +573,42 @@ adt_heatmaps <- lapply(
 #adt_heatmaps
 ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=6) %>%
   annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
+
+# Integration
+
+```{r}
+objs_mapped_merged <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
+obj_post_harmony_int <- runIntegration(objs_filt_mapped,
+                                       integration_method = 'harmony',
+                                       dim.reduct = "rpca",
+                                       harmony.group.by.vars = c('capID', 'hash.ID'))
+
+
+saveRDS(obj_post_harmony_int,here('saved_rds/obj_post_harmony.Rds'), compress=FALSE)
+obj_post_harmony_int <- readRDS(here('saved_rds/obj_post_harmony.Rds'))
+# rm(pbmc.merged)
+gc()
+```
+
+```{r}
+plot_list <- list()
+plot_list <- plotIntegrationDiagnostics(plot_list = plot_list,
+                                        seurat.obj = obj_post_harmony_int,
+                                        sample_col = 'capID',
+                                        subset_id = 'full',
+                                        integration_name = 'Harmony',
+                                        cell_labels = 'predicted.cell_type_lvl1',
+                                        res = c(0.9),
+                                        pt.size = .1)
+plot_list$full$Harmony$predicted.cell_type_lvl2 <- plotUmapIntegrated(obj_post_harmony_int, group.by = 'predicted.cell_type_lvl2', label.size = 3, pt.size = .1, title = 'predicted.cell_type_lvl2')
+```
+
+```{r}
+integration_diagnostic_plots <- ggarrange(plot_list$full$Harmony$predicted.cell_type_lvl1,
+          plot_list$full$Harmony$predicted.cell_type_lvl2,
+          plot_list$full$Harmony$seurat_clusters$`0.9`,
+          plot_list$full$Harmony$capID,
+          ncol=2, nrow = 2)
+integration_diagnostic_plots
 ```
