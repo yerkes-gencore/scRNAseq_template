@@ -1,14 +1,84 @@
-install.packages(c('remotes'))
-install.packages(c('ggh4x')) ## for threshold filtering plots
-remotes::install_github('chris-mcginnis-ucsf/DoubletFinder')
-remotes::install_github('yerkes-gencore/gencoreSC')
+## WIP, idea is to possibly have a script that checks all the packages
+## needed for the 'default' analysis, and installs them if needed. This could
+## facilitate automation later on
 
-install.packages('BiocManager')
-BiocManager::install("BiocParallel")
-BiocManager::install("MAST")
-BiocManager::install("SingleR")
+cran_packages <- c(
+  'remv',
+  'BiocManager',
+  'here',
+  'tidyverse',
+  'Seurat',
+  'ggh4x' ## for threshold filtering plots
+  #'ggpubr' ## needed?
+)
 
-remotes::install_github("mojaveazure/seurat-disk")
-remotes::install_github('satijalab/seurat-data')
-## need seurat disk and seurat data prior to azimuth
-remotes::install_github('satijalab/azimuth')
+bioc_packages <- c(
+  'SingleR',
+  'BiocParallel',             ## allow parallelization
+  'MAST'                      ## DGE algorithm
+)
+
+github_packages <- c(
+  'yerkes-gencore/gencoreSC'
+  # "mojaveazure/seurat-disk", ## Required for azimuth
+  # 'satijalab/seurat-data',   ## Required for azimuth
+  # 'satijalab/azimuth'
+)
+
+renv::init(restart = FALSE)
+
+for (package in cran_packages){
+  tryCatch(
+    {
+      if (!require(package, quietly = FALSE)){
+        renv::install.packages(package)
+      }
+    },
+    error=function(e){
+      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+      message(e)
+    },
+    warning=function(w){
+      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+      message(w)
+    }
+  )
+}
+
+for (package in bioc_packages){
+  tryCatch(
+    {
+      if (!require(package, quietly = FALSE)){
+        renv::install(paste0('bioc::', package))
+      }
+    },
+    error=function(e){
+      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+      message(e)
+    },
+    warning=function(w){
+      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+      message(w)
+    }
+  )
+}
+
+for (package in github_packages){
+  tryCatch(
+    {
+      if (!require(package, quietly = FALSE)){
+        renv::install(paste0('github::', package))
+      }
+    },
+    error=function(e){
+      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+      message(e)
+    },
+    warning=function(w){
+      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+      message(w)
+    }
+  )
+}
+
+renv::snapshot()

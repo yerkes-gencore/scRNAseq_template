@@ -8,6 +8,13 @@ output: html_document
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+```{}
+this file holds some code that is a work in progress, and may be added to the main 
+workflow later
+```
+
+
 # Trajectory inference
 
 ```{r}
