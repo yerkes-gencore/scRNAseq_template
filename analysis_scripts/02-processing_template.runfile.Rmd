@@ -148,64 +148,37 @@ regime to use.
 ```
 
 ```{r}
-## Define your thresholds
-cutoffs <- list(nUMI.max = Inf,
-                nUMI.min = 500,
-                nGene.max = Inf,
-                nGene.min = 250,
-                log10GenesPerUMI.max = Inf,
-                log10GenesPerUMI.min = 0.80,
-                mitoRatio.max = 0.2,
-                mitoRatio.min = 0,
-                riboRatio.max = 0.5,
-                riboRatio.min = 0)
-
-# define the different filtering regimes we want to test
-filtConfig <-
-  list("input" = list(by_outlier=FALSE,
-                      nmads = 4,
-                      by_threshold=FALSE,
-                      cutoffs=cutoffs),
-       "cutoffOnly" = list(by_outlier=FALSE,
-                                nmads = 4,
-                               by_threshold=TRUE,
-                               cutoffs=cutoffs),
-       "outlierOnly" = list(by_outlier=TRUE,
-                                nmads = 4,
-                                by_threshold=FALSE,
-                                cutoffs=cutoffs),
-       "filtBoth" = list(by_outlier=TRUE,
-                         nmads = 4,
-                         by_threshold=TRUE,
-                         cutoffs=cutoffs))
-```
-
-```{r, include=FALSE}
-## Add metadata columns for filtering criteria
 objs <- lapply(objs,
               addQCmetrics,
               mito.pattern = "^MT", ## edit patterns as needed
               ribo.pattern = "^RP[SL]")
+```
 
-for (filtName in names(filtConfig)) {
-  objs <- addQCfilter(objs, 
-              filterName = filtName, 
-              by_threshold = filtConfig[[filtName]]$by_threshold,
-              cutoffs = cutoffs,
-              by_outlier = filtConfig[[filtName]]$by_outlier, 
-              nmads = filtConfig[[filtName]]$nmads)
-}
+```{r}
+## Define your thresholds. Helper function generate_cutoffs will 
+## initialize a list using outlier detection
+cutoffs <- lapply(objs, generate_cutoffs)
+## you can always edit these directly
+```
+
+```{r, include=FALSE}
+## this applies the cutoffs to your objects, and stores whether a cell 
+## is filtered or not in the 'outliers' column
+objs <- mapply(addQCfilter, objs, filterName = 'outliers', cutoffs)
 ```
 
 ```{r, message=TRUE, warning=FALSE, fig.width=18, fig.height=15}
 ## Generate dashboard plots of filtering regimes
 cell_filtering_plots <- list()
-for (filtName in names(filtConfig)) {
+## if you added multiple filters, say one with default settings and one with
+## modified thresholds, you can plot all of them here. Specifying 'input'
+## shows the unfiltered cells in a separate dashboard
+for (filtName in c('input', 'outliers')) {
   cell_filtering_plots[[filtName]] <- plotQCRidgesJoint(objs, 
-                                              filtName=filtName,
-                                              title=filtName, 
+                                              filtName = filtName,
+                                              title = filtName, 
                                               split_by = "capID", 
-                                              color_by ="riboRatio",
+                                              color_by = "riboRatio",
                                               cutoffs = cutoffs,
                                               facet_colors = TRUE)
 }
@@ -213,8 +186,8 @@ cell_filtering_plots
 ```
 
 ```{r}
-## choose a filtering regime to use and apply it to the captures
-objs_filt <- lapply(objs, subset, subset = cutoffsOnly)
+## choose a boolean metadata column to filter on
+objs_filt <- lapply(objs, subset, subset = 'outliers')
 rm(objs)
 qc_receipts$qc_filtering <- lapply(objs_filt, dim)
 ```
@@ -290,12 +263,6 @@ doubletfinder_results %>%
 ```
 
 ```{r}
-## This will remove doublets
-objs_filt <- lapply(objs_filt, removeDFDoublets)
-qc_receipts$doublet_removal <- lapply(objs_filt, dim)
-```
-
-```{r}
 saveRDS(objs_filt, here('saved_rds/objs_filt.Rds'))
 objs_filt <- readRDS(here('saved_rds/objs_filt.Rds'))
 ```
@@ -314,7 +281,6 @@ object is stable.
 Azimuth has lots of dependencies and can be harder to use, you may
 prefer to use singleR instead
 ```
-
 
 ```{r}
 objs_filt_mapped <- lapply(objs_filt, 
@@ -418,8 +384,7 @@ qc_filtering_results_plot <- reshape2::melt(as.matrix(qc_filtering_summary)) %>%
                     labels = c('Low quality cells',
                                'Bad GEMs',
                                # 'HTO Doublets',
-                               'High quality cells')) #+
-  # scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
+                               'High quality cells'))
 ```
 
 ## Clustering
@@ -487,6 +452,28 @@ ggarrange(plotlist = umpas.rna[["Phase"]], ncol=6, nrow=6,
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
 ```
+
+## Remove doublets
+
+```{}
+Moved this to the end to make it more intentional, and you can see how doublets
+are clustering in your data prior to removing
+```
+
+
+```{r}
+## This will remove doublets
+objs_filt <- lapply(objs_filt, removeDFDoublets)
+qc_receipts$doublet_removal <- lapply(objs_filt, dim)
+```
+
+## Regress cell cycle
+
+```{}
+TODO: make some example code for regressing cell cycle. Ideally it would be done
+after inspecting all QC in concert to decide if necessary. 
+```
+
 
 # ADT Processing
 
