@@ -2,4 +2,4 @@
 # path upto the 'runs/' folder. All subsequent paths should be relative to this root
 rootDir: '/yerkes-cifs/runs'
 # cellranger counts output parent folder
-alignmentDir: 'Analysis/2023_Analyses/p23120_Amanda/Processing/Total_LNMC'
+alignmentDir: 'tools/templates/example_data/sc_ADT+GEX+HTO'
