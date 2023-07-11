@@ -10,8 +10,7 @@ library(here)
 library(gencoreSC)
 ```
 
-
-```{r setup, include=FALSE}
+```{r}
 samplesheet <- read.table(here('config/samplesheet.txt'), header=TRUE)
 config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
 
@@ -22,9 +21,11 @@ objs <- mapply(readCounts10x,
                          samplesheet$FileID,
                          'outs/per_sample_outs/', 
                          samplesheet$FileID, 
-                         'count/sample_filtered_feature_bc_matrix'),
+                         'count/sample_feature_bc_matrix'),
                strip.suffix = FALSE,
                USE.NAMES = TRUE)
+# objs <- objs$Cap31
+raw_object <- objs
 ```
 
 ```{r}
@@ -34,7 +35,6 @@ objs <- lapply(objs,
               mito.pattern = "^MT", ## edit patterns as needed
               ribo.pattern = "^RP[SL]")
 ```
-
 
 ```{r}
 #' Add QC filters
@@ -56,7 +56,7 @@ objs <- lapply(objs,
 #' \dontrun{
 #'   ## where objs is a list of Seurat objects for each capture
 #'   cutoffs <- lapply(objs, generate_cutoffs)
-#'   objs <- objs()
+#'   objs <- mapply(addQCfilter, objs, 'outliers', cutoffs)
 #' }
 #'
 #' @export
@@ -84,11 +84,11 @@ addQCfilter <- function(obj,
   }
   ## For ridges plot, need a bool to filter cells on
   obj@meta.data$input <- TRUE
-  
+
   ## filtering
   metadata <- obj@meta.data
   metadata <- metadata %>% dplyr::mutate(
-    QC_filtered =
+    !!(filterName) :=
       .data$nUMI >= cutoffs$nUMI.min &
       .data$nUMI <= cutoffs$nUMI.max &
       .data$nGene >= cutoffs$nGene.min &
@@ -151,337 +151,94 @@ generate_capture_QC_cutoffs <- function(capture,
   if (lower < min.value) { lower <- min.value }
   return(list(upper = upper, lower = lower))
 }
-
 ```
+
+
 
 ```{r}
 cutoffs <- lapply(objs, generate_capture_QC_cutoffs)
-# cutoffs$Apr05_HH_5A$nUMI.min <- 300
-# cutoffs$Apr05_HH_5A$nGene.min <- 300
-objs1 <- mapply(addQCfilter, objs, 'outliers', cutoffs)
+objs <- mapply(addQCfilter, objs, 'outliers', cutoffs)
+```
 
 
+```{r, message=TRUE, warning=FALSE, fig.width=18, fig.height=15}
+## Generate dashboard plots of filtering regimes
+cell_filtering_plots <- list()
+## if you added multiple filters, say one with default settings and one with
+## modified thresholds, you can plot all of them here. Specifying 'input'
+## shows the unfiltered cells in a separate dashboard
+for (filtName in c('input', 'outliers')) {
+  cell_filtering_plots[[filtName]] <- plotQCRidgesJoint(objs, 
+                                              filtName = filtName,
+                                              title = filtName, 
+                                              split_by = "capID", 
+                                              color_by = "riboRatio",
+                                              cutoffs = cutoffs,
+                                              facet_colors = TRUE)
+}
+cell_filtering_plots
 ```
 
 ```{r}
-#' Plot both ridges and joint qc plots as a ggarrange object
-#'
-#' Plot both ridges and joint qc plots as an object of class ggarrange
-#'
-#' @param obj Unfiltered Seurat object after running 'addQCmetrics()' and 'addQCfilter()'
-#' @param filtName Metadata column to filter by for the plot
-#' @param split_by Metadata column to split ridge plots by (i.e. usually capture ID or sample ID)
-#' @param color_by Metric with to use for scale_color_gradient (i.e. "mitoRatio" or "riboRatio" or any other metric with limits=c(0,1))
-#' @param cutoffs Named list of cutoff values used in 'addQCmetrics()' for the given filtName
-#' @param title Main title
-#' @param mixed_sort Whether to use `gtools::mixedsort()` to determine level order of `split_by`.
-#' @param y.text Whether to include labels for split_by on the y axis on ridge plots. Can set to `TRUE` when labels are very short.
-#' @param facet_colors Whether to color facet labels by `split_by`. Requires package `ggh4x`.
-#'
-#' @return An object of class ggarrange, which is a ggplot or a list of ggplot.
-#'
-#' @importFrom gtools mixedsort
-#' @export
-plotQCRidgesJoint <- function(obj,
-                            filtName,
-                            split_by,
-                            color_by="mitoRatio",
-                            cutoffs,
-                            title,
-                            mixed_sort = T,
-                            y.text = FALSE,
-                            facet_colors = F) {
-
-  # if it's a split object, merge metadata and subset according to logical in filtName
-  if (!is.list(obj)) {
-    md <- obj@meta.data %>%
-      dplyr::filter(.[[filtName]])
-  } else if (is.list(obj)) {
-    md <- lapply(obj, function(x) {x@meta.data}) %>%
-      dplyr::bind_rows() %>%
-      dplyr::filter(.[[filtName]])
-  }
-
-  if (mixed_sort == T) {
-    md <- md %>%
-      dplyr::mutate(!!split_by := factor(.[[split_by]], levels = gtools::mixedsort(unique(md[[split_by]]))))
-    # sample_order <- unique(md[[split_by]]) %>% gtools::mixedsort()
-    # md[[split_by]] <- factor(md[[split_by]], levels = sample_order)
-  }
-
-  p_ridges <- md %>%
-    plotQC_ridges(cutoffs=cutoffs, split_by=split_by)
-
-  p_joint <- md %>%
-    plotQC_joint(cutoffs=cutoffs, split_by=split_by, color_by=color_by, facet_colors = facet_colors)
-
-  p_arranged <- ggpubr::ggarrange(p_ridges, p_joint, ncol=2, nrow=1) %>%
-    ggpubr::annotate_figure(top = ggpubr::text_grob(title, face = "bold", size = 14))
-  return(p_arranged)
-}
-
-#' Plot QC metadata across multiple captures or samples as density ridges plot
-#'
-#' Plots QC metadata for multiple captures or samples with ggplot2::geom_density_ridges
-#'
-#' @param metadata Seurat object metadata after running 'addQCmetrics()' and 'addQCfilter()'
-#' @param cutoffs Named list of cutoffs
-#' @param split_by Metadata column to split ridge plots by (i.e. usually capture ID or sample ID)
-#' @param y.text Whether to include labels for split_by on the y axis. Can set to `TRUE` when labels are very short.
-#'
-#' @return An object of class ggarrange, which is a ggplot or a list of ggplot.
-#'
-#' @export
-plotQC_ridges <- function(metadata, cutoffs=NULL, split_by, y.text = FALSE) {
-
-  metadata <- metadata %>%
-    dplyr::mutate(!!split_by := forcats::fct_rev(.[[split_by]]))
-
-  # Visualize the number of cell counts per sample
-  p.nCells <- metadata %>%
-    ggplot(aes(y=.data[[split_by]], group=.data[[split_by]], fill=.data[[split_by]]), color=NA) +
-    geom_bar() +
-    theme_classic() +
-    theme(plot.title = element_text(hjust=0.5, face="bold")) +
-    theme(legend.position="none") +
-    ggtitle("N Cells")
-
-  p1 <- plotQC_ridges.helper(metadata, x="nUMI", split_by = split_by,
-                             log10x=T, cutoffs=cutoffs, y.text = y.text)
-
-  p2 <- plotQC_ridges.helper(metadata, x="nGene", split_by = split_by,
-                             log10x=T, cutoffs=cutoffs, y.text = y.text)
-
-  p3 <- plotQC_ridges.helper(metadata, x="log10GenesPerUMI", split_by = split_by,
-                             cutoffs=cutoffs, y.text = y.text)
-
-  p.mtRatio <- plotQC_ridges.helper(metadata, x="mitoRatio", split_by = split_by,
-                                    cutoffs=cutoffs, y.text = y.text)
-
-  p.rbRatio <- plotQC_ridges.helper(metadata, x="riboRatio", split_by = split_by,
-                                    cutoffs=cutoffs, y.text = y.text)
-
-  allCaps_QC_ridges <- ggpubr::ggarrange(p.nCells, p1, p2, p3, p.mtRatio, p.rbRatio, ncol=2, nrow=3)
-  return(allCaps_QC_ridges)
-}
-
-plotQC_ridges.helper <- function(metadata, x, split_by, cutoffs=NULL, log10x=F, y.text = FALSE) {
-
-  p <- metadata %>%
-    ggplot(aes(x=.data[[x]], y=.data[[split_by]], fill=.data[[split_by]]), color=NA) +
-    ggridges::geom_density_ridges(size = 0, alpha = 0.8) +
-    theme_classic() +
-    theme(legend.position="none") +
-    ggtitle(x) +
-    theme(plot.title = element_text(hjust=0.5, face="bold")) +
-    theme(legend.position="none")
-
-  if (y.text == FALSE) {
-    theme(axis.text.y = element_blank(), axis.title.y = element_blank(),
-          axis.ticks.y = element_blank(), axis.line.y = element_blank())
-  }
-
-  # Add vert line for min cutoff (if provided)
-  # cutoff.min <- cutoffs[[paste0(x,".min")]]
-  # if (!is.null(cutoff.min)) {
-  #   if (cutoff.min != 0) {
-  #     p <- p +
-  #       geom_vline(xintercept = cutoff.min, linetype = 'dashed')
-  #   }
-  # }
-  # Add vert line for max cutoff (if provided)
-  # cutoff.max <- cutoffs[[paste0(x,".max")]]
-  # if (!is.null(cutoff.max)) {
-  #   if (cutoff.max != Inf) {
-  #     p <- p +
-  #       geom_vline(xintercept = cutoff.max, linetype = 'dashed')
-  #   }
-  # }
-
-  if(log10x) {
-    p <- p + scale_x_log10()
-  }
-  return(p)
-}
-
-#' Plot QC nUMI vs nGene
-#'
-#' Visualize the correlation between genes detected and number of UMIs to determine whether strong presence of cells with low numbers of genes/UMIs
-#'
-#' @param metadata Seurat object metadata after running 'addQCmetrics()' and 'addQCfilter()'
-#' @param cutoffs Named list of cutoffs
-#' @param split_by Metadata column to split ridge plots by (i.e. usually capture ID or sample ID)
-#' @param color_by Metric with to use for scale_color_gradient (i.e. "mitoRatio" or "riboRatio" or any other metric with limits=c(0,1))
-#' @param facet_colors Logical; whether to plot facet colors with ggh4x::facet_wrap2 (experimental)
-#'
-#' @return An object of class ggarrange, which is a ggplot or a list of ggplot.
-#'
-#' @export
-plotQC_joint <- function(metadata, split_by="capID", cutoffs = NULL,
-                         color_by="mitoRato", facet_colors = FALSE) {
-
-  # plot
-  p <- metadata %>%
-    ggplot(aes(x=.data$nUMI, y=.data$nGene, color=.data[[color_by]])) +
-    geom_point(alpha=0.2) +
-    scale_color_gradient(low = "goldenrod1", high = "red", limits=c(0,1)) +
-    stat_smooth(method=lm) +
-    scale_x_log10() +
-    scale_y_log10() +
-    theme_classic() +
-    theme(axis.text.x = element_text(angle = 45, vjust = 1, hjust=1))
-  
-  if (!is.null(cutoffs)) {
-    if (is(cutoffs, "list") && all(sapply(cutoffs, is.list))) {
-      cutoffs <- do.call(rbind, lapply(cutoffs, as.data.frame))
-      cutoffs[[split_by]] <- rownames(cutoffs)
-      p + geom_vline(data = cutoffs, mapping = aes(group = 'capID', xintercept = .data['nUMI.min']))
-    }
-  }
-  
-  if (!facet_colors) {
-    p <- p +
-      facet_wrap(~.data[[split_by]])
-  } else {
-    # define facet_wrap strip color as a ggplot aesthetic
-    num_splits <- unique(metadata[[split_by]]) %>% length()
-    strip_colors <- ggh4x::strip_themed(background_x = ggh4x::elem_list_rect(
-      fill = scales::hue_pal()(num_splits) %>% rev
-      ))
-
-    p <- p +
-      ggh4x::facet_wrap2(~.data[[split_by]], strip = strip_colors)
-  }
-
-  
-  # if (!is.null(cutoffs)) {
-  #   if ('nUMI.min' %in% names(cutoffs)){
-  #     ## Means the cutoffs should be for the whole dataset
-  #     p <- p +
-  #       geom_vline(xintercept = cutoffs$nUMI.min, linetype = 'dashed') +
-  #       geom_hline(yintercept = cutoffs$nGene.min, linetype = 'dashed')
-  #   } else {
-  #     for (group in unique(metadata[[split_by]])){
-  #       p <- p + geom_vline(data=filter(metadata, .data[[split_by]] == group),
-  #                                       aes(xintercept = cutoffs[[group]][['nUMI.min']]),
-  #                                       linetype = 'dashed')
-  #     }
-  #     
-  #   }
-  # 
-  # }
-  return(p)
-}
-
-
-```
-
-
-```{r, fig.width=11}
-cutoffs$Apr05_HH_5A$nUMI.min <- 500
-cutoffs$Apr20_HH_5A$nUMI.min <- 1000
-
-plotQCRidgesJoint(objs1, 
-                  filtName='input',
-                  title='outliers', 
-                  split_by = "capID", 
-                  color_by ="mitoRatio",
-                  cutoffs = cutoffs,
-                  facet_colors = TRUE)
-plotQCRidgesJoint(objs1, 
-                  filtName='QC_filtered',
-                  title='outliers', 
-                  split_by = "capID", 
-                  color_by ="mitoRatio",
-                  cutoffs = cutoffs$Apr05_HH_5A,
-                  facet_colors = TRUE)
+# objs <- subset(objs$Cap31, subset = outliers)
 ```
 
 ```{r}
-# Trajectory inference
+objs$Cap30 <- gencoreSC::NormFindVarFeatScaleData(objs$Cap30, nfeatures = 3000)
+tmp <- raw_object
+tmp <- tmp$Cap30[c(objs$Cap30@assays$RNA@var.features, rownames(objs$Cap30@assays$ADT)),]
 
-## Read in data ----
+tmp <- tmp[, sample(colnames(tmp), size =5000, replace=F)]
+out_mat <- rbind(tmp@assays$RNA@counts, tmp@assays$ADT@counts)
+# SeuratDisk::SaveH5Seurat(tmp, here('saved_rds/test_small_dataset.h5.h5seurat'), overwrite = TRUE)
+DropletUtils::write10xCounts(here('saved_rds/test_data_2.h5'), 
+                             x = out_mat, 
+                             gene.type = c(rep('Gene Expression', 3000), rep('Antibody Capture', 14)),
+                             type = 'HDF5',
+                             version = '3',
+                             overwrite = TRUE)
+```
 
+## testing sc-SHC
 
+```{r}
+library(scSHC)
+library(Seurat)
+```
 
-## Trajectory inference ----
-#library(slingshot)
-sce <- as.SingleCellExperiment(combined.obj)
-sce <- slingshot(sce, clusterLabels = 'seurat_clusters', reducedDim = 'UMAP')
-test <- as.Seurat(sce)
+```{r}
+clusters <- scSHC::scSHC(objs@assays$RNA@counts, cores = 60)
+```
 
-dimred <- combined.obj@reductions$umap
-clustering <- combined.obj$seurat_clusters
-counts <- as.matrix(combined.obj@assays$RNA@counts[combined.obj@assays$RNA@var.features,])
-lineages <- getLineages(data = dimred, clusterLabels = clustering)
-
-
-
-
-DimPlot(combined.obj, reduction = 'umap')
-ssds <- SlingshotDataSet(sce)
-pto <- as.PseudotimeOrdering(sce)
-lines(SlingshotDataSet(sce))
-
-
-
-## Most common features ----
-
-#Plotting highly expressed genes. We expect to see constitutively expressed genes (e.g. mitochondrial, ribosomal, etc).
-
-
-plot_top_genes <- function(data, n=20){
-  C <- data@assays$RNA@counts
-  C <- Matrix::t(Matrix::t(C)/Matrix::colSums(C)) * 100
-  most_expressed <- order(apply(C, 1, median), decreasing = T)[20:1]
-  par(mar=c(5,12,4,1)+.1)
-  boxplot(as.matrix(t(C[most_expressed, ])), las=1, cex=0.1, xlab = "% total count per cell", col = (scales::hue_pal())(20)[20:1], horizontal = TRUE, main=data@project.name)
-}
-tmp <- lapply(captures, plot_top_genes)
+```{r}
+objs <- gencoreSC::NormFindVarFeatScaleData(objs)
+objs <- Seurat::RunPCA(objs) 
+objs <- Seurat::RunUMAP(objs, dims=1:30) 
+objs <- Seurat::FindNeighbors(objs) 
+objs <- Seurat::FindClusters(objs,resolution = 0.8)
+```
 
 
+```{r}
+full_obj <- readRDS('/yerkes-cifs/runs/Analysis/2023_Analyses/p23120_Amanda/Analysis/saved_rds/obj_post-clustering.Rds')
+full_obj.sub <- subset(full_obj, subset = capID == 'Cap31')
+```
 
-##How much of each capture is in each cluster ----
-
-if (hashed){
-  tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters,
-                                    combined.obj$ID))
-  knitr::kable(tmp, caption = 'Number of cells')
-  tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
-  knitr::kable(tmp, caption = 'Percentage of cells from capture', digits = 1)
-} else {
-  tmp <- as.data.frame.matrix(table(combined.obj$seurat_clusters,
-                                    combined.obj$orig.ident))
-  knitr::kable(tmp, caption = 'Number of cells')
-  tmp <- tmp %>% mutate(across(.cols= everything(), ~ 100*.x / sum(.x))) #, .names = "{.col}_percent"
-  knitr::kable(tmp, caption = 'Percentage of cells from capture', digits = 1)
-}
+```{r}
+clusters1 <- scSHC::scSHC(full_obj.sub@assays$RNA@counts, cores = 60, batch = full_obj.sub$hash.ID)
+```
 
 
+```{r}
+clusters2 <- testClusters(full_obj.sub@assays$RNA@counts, cluster_ids = full_obj.sub$seurat_clusters, batch = full_obj.sub$hash.ID, cores = 60, var.genes = VariableFeatures(full_obj.sub))
+```
 
-## QC threshold detection ----
+```{r}
+table(clusters2[[1]], full_obj.sub$seurat_clusters)
+```
 
-generate_outlier_thresholds <- function(capture, metric, nmads){
-  data <- capture@meta.data[[metric]]
-  data.mad <- stats::mad(data)
-  upper <- stats::median(data) + nmads * data.mad
-  lower <- stats::median(data) - nmads * data.mad
-  if (lower < 0) { lower <- 0 }
-  return(list(upper=upper, lower=lower))
-}
 
-generate_cutoffs <- function(capture, 
-                             nmads,
-                             metrics = c('nUMI', 'nGene', 'riboRatio',
-                                         'mitoRatio', 'log10GenesPerUMI')){
-  cutoffs <- list()
-  for (metric in metrics){
-    thresholds <- generate_outlier_thresholds(capture, metric, nmads)
-    cutoffs[[paste0(metric, '.max')]] <- thresholds[['upper']]
-    cutoffs[[paste0(metric, '.min')]] <- thresholds[['lower']]
-  }
-  return(cutoffs)
-}
-
+```{r}
+table(full_obj.sub$seurat_clusters[names(full_obj.sub$seurat_clusters) %in% paste0('Cap31_', names(clusters[[1]]))], clusters[[1]][paste0('Cap31_', names(clusters[[1]])) %in% names(full_obj.sub$seurat_clusters)])
 ```
 

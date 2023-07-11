@@ -187,7 +187,7 @@ cell_filtering_plots
 
 ```{r}
 ## choose a boolean metadata column to filter on
-objs_filt <- lapply(objs, subset, subset = 'outliers')
+objs_filt <- lapply(objs, subset, subset = outliers)
 rm(objs)
 qc_receipts$qc_filtering <- lapply(objs_filt, dim)
 ```
