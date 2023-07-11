@@ -1,10 +1,11 @@
 # Template specific
-## You may want to add these folders to an actual working project, but
-## they are left out of the template to preserve the directory structure
-#reports/*
-#plots/*
-#saved_rds/*
-#reference/*
+reports/*
+plots/*
+saved_rds/*
+reference/*
+
+## general filetypes
+
 **.html
 **.utf8.md
 **.knit.md

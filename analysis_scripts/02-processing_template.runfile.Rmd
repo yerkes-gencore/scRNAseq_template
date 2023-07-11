@@ -10,13 +10,10 @@ library(Seurat)
 library(tidyverse)
 library(here)
 library(gencoreSC)
-library(Azimuth)
+# library(Azimuth)      ## Can be tricky to install, singleR is easier
 library(SingleR)
-library(SeuratData)
 library(ggpubr)
 library(BiocParallel)
-## SeuratData::InstallData('pbmc3k')
-#devtools::install_github('yerkes-gencore/gencoreSC', ref = 'integration')
 knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
@@ -39,8 +36,19 @@ https://github.com/yerkes-gencore/gencoreSC for more information).
 # Load configuration
 
 ```{r}
+## Disables some functionality for test
 samplesheet <- read.table(here('config/samplesheet.txt'), header=TRUE)
+if ('capture_31' %in% samplesheet$FileID){
+  message('Your samplesheet file has template defaults. Edit "config/samplesheet.txt" to start your project')
+  message('Waiting 10 seconds to make sure you see this! If this is a test run, ignore this, script will resume shortly')
+  Sys.sleep(10)
+}
 config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
+if (config$alignmentDir == 'tools/templates/example_data/sc_ADT+GEX+HTO'){
+  message('Your config file has template defaults. Edit "config/scRNA_GEX_config.yml" to start your project')
+  message('Waiting 10 seconds to make sure you see this! If this is a test run, ignore this, script will resume shortly')
+  Sys.sleep(10)
+}
 ```
 
 # GEX processing
@@ -49,8 +57,9 @@ config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
 
 ```{r}
 ## Finding files for SoupX, could also manually specify
+## sometimes the pattern is different based on cellranger version
 soupx_files <- lapply(samplesheet$FileID, function(x){
-  findSoupXFiles(file.path(config$rootDir, config$alignmentDir, x))
+  findSoupXFiles(file.path(config$rootDir, config$alignmentDir, x), filtered_mat_pattern = 'sample_feature_bc_matrix$')
 })
 names(soupx_files) <- samplesheet$Label
 # Running soupx takes a while
