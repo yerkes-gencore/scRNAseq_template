@@ -1,0 +1,105 @@
+---
+title: "scRNAseq celltype ID template"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+library(RColorBrewer)
+library(clustree)
+library(ggpubr)
+library(DT)
+```
+
+
+# Load data
+
+```{r}
+processed_obj <- readRDS(here('saved_rds/obj_final_post_processing.Rds'))
+```
+
+# clustree
+
+```{r}
+clustree_obj <- processed_obj
+for (res in seq(0.2, 1.5, .1)){
+  ## in case you rerun this with different ranges of res
+  if (!(paste0('RNA_snn_res.', res) %in% colnames(clustree_obj@meta.data))){
+    clustree_data <- FindClusters(processed_obj, resolution = res) 
+  } else{
+    print(paste0('Resolution ', res, ' already calculated, skipping to next res'))
+  }
+}
+```
+
+```{r, fig.height=14, fig.width=14}
+cluster_tree <- clustree(clustree_data)
+cluster_tree
+```
+
+```{r}
+## Chose a resolution
+processed_obj <- FindClusters(processed_obj, resolution = )
+```
+
+```{r, fig.width=10, fig.height=6}
+## if you want to plot some metadata with your new clusters
+clustering_dashboard_plot <- ggarrange(
+  DimPlot(processed_obj, group.by = 'hash.ID'),
+  DimPlot(processed_obj, group.by = 'seurat_clusters'),
+  DimPlot(processed_obj, group.by = 'Phase'),
+  DimPlot(processed_obj, group.by = 'predicted.cell_type_lvl1', label = FALSE),
+  nrow = 2, ncol = 2)
+clustering_dashboard_plot
+```
+
+```{r}
+## saving the clustered obj lets you call findMarkers as a background script
+## see the script at R/findMarkers.R
+saveRDS(processed_obj, file = here('saved_rds/obj_post-initial-clustering.Rds'), compress = FALSE)
+```
+
+# cluster markers
+
+```{r}
+## Found using the saved rds and the background job script R/findMarkers.R
+cluster_markers <- readRDS(here('saved_rds/cluster_markers_test.Rds'))
+```
+
+```{r}
+cluster_marker_DT <- cluster_markers %>% 
+  dplyr::select(cluster, gene, avg_log2FC, p_val, p_val_adj, pct.1, pct.2) %>%
+  filter(p_val_adj <= 0.05) %>%
+  mutate(avg_log2FC = round(avg_log2FC, 3),
+         p_val = format(p_val, scientific = TRUE, digits = 3),
+         p_val_adj = format(p_val_adj, scientific = TRUE, digits = 3),
+         pct.1 = round(pct.1, 3)*100,
+         pct.2 = round(pct.2, 3)*100) %>%
+  datatable(
+    rownames = FALSE,
+    colnames = c('Cluster',
+      'Gene', 
+      'Avg. Log2 fold change',
+      'p-value', 
+      'Adj. p-value',
+      '% expressed in cluster',
+      '% expressed outside cluster'), 
+    caption='Markers within cluster relative to outside cluster',
+    filter='top',
+    autoHideNavigation = TRUE,
+    extensions = c('Buttons', 'Scroller'),
+    options = list(
+      dom = 'Bfrtip',
+      buttons = c('copy', 'csv'),
+      deferRender = TRUE
+    )) #%>%
+    # formatRound(c('avg_log2FC'), digits=3) %>%
+    # formatRound(c('pct.1', 'pct.2'), digits = 2) %>%
+    # formatSignif(c('p_val', 'p_val_adj'))
+cluster_marker_DT
+```
