@@ -1,3 +1,4 @@
-Use this folder to store project level configuration data, including the 
-samplesheet (used to find and label samples used in the project) and the
-config (used to find output folders).
+Use this folder to store project level configuration data, including the
+samplesheet (used to find and label samples used in the project),
+config (used to find output folders), and optionally a hashtag oligo
+table used to parse your hashed data.
