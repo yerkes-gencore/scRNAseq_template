@@ -10,10 +10,25 @@ library(here)
 library(gencoreSC)
 ```
 
-```{r}
-samplesheet <- read.table(here('config/samplesheet.txt'), header=TRUE)
-config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
+```{}
+This script is intended to be a convenient way to load in data quickly for testing
+new features. It uses some test data stored in a stable location
+```
 
+
+```{r}
+# samplesheet <- read.table(here('config/samplesheet.txt'), header=TRUE)
+# config <- yaml::yaml.load_file(here("config/scRNA_GEX_config.yml"))
+samplesheet <- data.frame(FileID = c('capture_31', 'capture_32'),
+                          Label = c('Cap31', 'Cap32'))
+config <- list()
+config$rootDir <- '/yerkes-cifs/runs'
+config$alignmentDir <- 'tools/templates/example_data/sc_ADT+GEX+HTO'
+
+```
+
+
+```{r}
 objs <- mapply(readCounts10x,
                samplesheet$Label,
                file.path(config$rootDir,
@@ -24,8 +39,6 @@ objs <- mapply(readCounts10x,
                          'count/sample_feature_bc_matrix'),
                strip.suffix = FALSE,
                USE.NAMES = TRUE)
-# objs <- objs$Cap31
-raw_object <- objs
 ```
 
 ```{r}
@@ -37,129 +50,9 @@ objs <- lapply(objs,
 ```
 
 ```{r}
-#' Add QC filters
-#'
-#' Adds logical metadata column for a given set of arbitrary cutoffs and/or outliers
-#'
-#' @param obj Seurat object
-#' @param filterName Name of new metadata column with logical filter
-#' @param cutoffs Named list of cutoffs with the following values:
-#'  nUMI.max, nUMI.min, nGene.max, nGene.min, log10GenesPerUMI.max,
-#'  log10GenesPerUMI.min, mitoRatio.max, mitoRatio.min, riboRatio.max, riboRatio.min
-#'   You can provide a single list of values to be used for all captures (not recommended),
-#'   or you can provide a list of lists, where each entry is thresholds for a single capture.
-#'   See `generate_capture_QC_cutoffs()` for help making a cutoffs list.
-#'
-#'
-#' @returns Seurat object(s) with a new metadata column indicating if the cell is within thresholds
-#' @examples
-#' \dontrun{
-#'   ## where objs is a list of Seurat objects for each capture
-#'   cutoffs <- lapply(objs, generate_cutoffs)
-#'   objs <- mapply(addQCfilter, objs, 'outliers', cutoffs)
-#' }
-#'
-#' @export
-
-# calculate metadata filter column but don't filter yet
-addQCfilter <- function(obj,
-                        filterName = NULL,
-                        cutoffs = NULL) {
-  if (is.null(filterName)){
-    stop('Use the "filterName" argument to specify a name/metadata column to store filtering outcomes')
-  }
-  if (is.null(cutoffs)){
-    message('No cutoffs provided. Consider running `generate_capture_QC_cutoffs()` to tailor cutoffs to your captures, or
-            manually provide cutoffs.\nUsing arbitrary default values to filter which may not be appropriate for your dataset.')
-    cutoffs <- list(nUMI.max = Inf,
-                    nUMI.min = 500,
-                    nGene.max = Inf,
-                    nGene.min = 250,
-                    log10GenesPerUMI.max = Inf,
-                    log10GenesPerUMI.min = 0.80,
-                    mitoRatio.max = 0.2,
-                    mitoRatio.min = 0,
-                    riboRatio.max = 0.4,
-                    riboRatio.min = 0)
-  }
-  ## For ridges plot, need a bool to filter cells on
-  obj@meta.data$input <- TRUE
-
-  ## filtering
-  metadata <- obj@meta.data
-  metadata <- metadata %>% dplyr::mutate(
-    !!(filterName) :=
-      .data$nUMI >= cutoffs$nUMI.min &
-      .data$nUMI <= cutoffs$nUMI.max &
-      .data$nGene >= cutoffs$nGene.min &
-      .data$nGene <= cutoffs$nGene.max &
-      .data$log10GenesPerUMI >= cutoffs$log10GenesPerUMI.min &
-      .data$log10GenesPerUMI <= cutoffs$log10GenesPerUMI.max &
-      .data$mitoRatio >= cutoffs$mitoRatio.min &
-      .data$mitoRatio <= cutoffs$mitoRatio.max &
-      .data$riboRatio >= cutoffs$riboRatio.min &
-      .data$riboRatio <= cutoffs$riboRatio.max)
-  obj@meta.data <- metadata
-  return(obj)
-}
-
-#' generate_capture_QC_cutoffs
-#'
-#' Generates default cutoffs for all metrics of interest based on median
-#' absolute deviation for the distribution of metric values in the capture.
-#'
-#' @param capture A seurat object
-#' @param nmads number of median absolute deviations, default 4
-#' @param metrics Columns of the capture metadata to calculate thresholds for
-#'
-#' @returns a list of min and max thresholds for each of `metrics`
-#' @export
-#'
-#' @examples
-#' \dontrun{
-#'   cutoffs <- generate_cutoffs(objs$Apr05_HH_5A)
-#'   ## multiple captures
-#'   cutoffs <- lapply(objs, generate_cutoffs)
-#' }
-generate_capture_QC_cutoffs <- function(capture,
-                                        nmads = 4,
-                                        metrics = c('nUMI',
-                                                    'nGene',
-                                                    'riboRatio',
-                                                    'mitoRatio',
-                                                    'log10GenesPerUMI')){
-  cutoffs <- list()
-  for (metric in metrics) {
-    thresholds <- .generate_outlier_thresholds(capture, metric, nmads)
-    cutoffs[[paste0(metric, '.max')]] <- thresholds[['upper']]
-    cutoffs[[paste0(metric, '.min')]] <- thresholds[['lower']]
-  }
-  return(cutoffs)
-}
-
-## Generates upper and lower threshold based on MAD calculation
-## helper function for generate_capture_QC_cutoffs
-.generate_outlier_thresholds <- function(capture,
-                                         metric,
-                                         nmads,
-                                         min.value = 0){
-  data <- capture@meta.data[[metric]]
-  data.mad <- stats::mad(data)
-  data.med <- stats::median(data)
-  upper <- data.med + nmads * data.mad
-  lower <- data.med - nmads * data.mad
-  if (lower < min.value) { lower <- min.value }
-  return(list(upper = upper, lower = lower))
-}
-```
-
-
-
-```{r}
 cutoffs <- lapply(objs, generate_capture_QC_cutoffs)
 objs <- mapply(addQCfilter, objs, 'outliers', cutoffs)
 ```
-
 
 ```{r, message=TRUE, warning=FALSE, fig.width=18, fig.height=15}
 ## Generate dashboard plots of filtering regimes
@@ -178,67 +71,3 @@ for (filtName in c('input', 'outliers')) {
 }
 cell_filtering_plots
 ```
-
-```{r}
-# objs <- subset(objs$Cap31, subset = outliers)
-```
-
-```{r}
-objs$Cap30 <- gencoreSC::NormFindVarFeatScaleData(objs$Cap30, nfeatures = 3000)
-tmp <- raw_object
-tmp <- tmp$Cap30[c(objs$Cap30@assays$RNA@var.features, rownames(objs$Cap30@assays$ADT)),]
-
-tmp <- tmp[, sample(colnames(tmp), size =5000, replace=F)]
-out_mat <- rbind(tmp@assays$RNA@counts, tmp@assays$ADT@counts)
-# SeuratDisk::SaveH5Seurat(tmp, here('saved_rds/test_small_dataset.h5.h5seurat'), overwrite = TRUE)
-DropletUtils::write10xCounts(here('saved_rds/test_data_2.h5'), 
-                             x = out_mat, 
-                             gene.type = c(rep('Gene Expression', 3000), rep('Antibody Capture', 14)),
-                             type = 'HDF5',
-                             version = '3',
-                             overwrite = TRUE)
-```
-
-## testing sc-SHC
-
-```{r}
-library(scSHC)
-library(Seurat)
-```
-
-```{r}
-clusters <- scSHC::scSHC(objs@assays$RNA@counts, cores = 60)
-```
-
-```{r}
-objs <- gencoreSC::NormFindVarFeatScaleData(objs)
-objs <- Seurat::RunPCA(objs) 
-objs <- Seurat::RunUMAP(objs, dims=1:30) 
-objs <- Seurat::FindNeighbors(objs) 
-objs <- Seurat::FindClusters(objs,resolution = 0.8)
-```
-
-
-```{r}
-full_obj <- readRDS('/yerkes-cifs/runs/Analysis/2023_Analyses/p23120_Amanda/Analysis/saved_rds/obj_post-clustering.Rds')
-full_obj.sub <- subset(full_obj, subset = capID == 'Cap31')
-```
-
-```{r}
-clusters1 <- scSHC::scSHC(full_obj.sub@assays$RNA@counts, cores = 60, batch = full_obj.sub$hash.ID)
-```
-
-
-```{r}
-clusters2 <- testClusters(full_obj.sub@assays$RNA@counts, cluster_ids = full_obj.sub$seurat_clusters, batch = full_obj.sub$hash.ID, cores = 60, var.genes = VariableFeatures(full_obj.sub))
-```
-
-```{r}
-table(clusters2[[1]], full_obj.sub$seurat_clusters)
-```
-
-
-```{r}
-table(full_obj.sub$seurat_clusters[names(full_obj.sub$seurat_clusters) %in% paste0('Cap31_', names(clusters[[1]]))], clusters[[1]][paste0('Cap31_', names(clusters[[1]])) %in% names(full_obj.sub$seurat_clusters)])
-```
-
