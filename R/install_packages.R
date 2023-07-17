@@ -3,7 +3,7 @@
 ## facilitate automation later on
 
 cran_packages <- c(
-  'remv',
+  'renv',
   'BiocManager',
   'here',
   'tidyverse',
