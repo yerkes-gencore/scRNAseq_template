@@ -61,7 +61,7 @@ knitr::kable(qc_table_ADT) %>%
 
 # GEX libraries
 
-```{r}
+```{r, fig.width=14, fig.height=6, eval=FALSE}
 qc_plot_GEX
 ```
 
