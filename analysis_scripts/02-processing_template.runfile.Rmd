@@ -166,7 +166,7 @@ objs <- lapply(objs,
 ```{r}
 ## Define your thresholds. Helper function generate_cutoffs will 
 ## initialize a list using outlier detection
-cutoffs <- lapply(objs, generate_cutoffs)
+cutoffs <- lapply(objs, generate_capture_QC_cutoffs)
 ## you can always edit these directly
 ```
 
