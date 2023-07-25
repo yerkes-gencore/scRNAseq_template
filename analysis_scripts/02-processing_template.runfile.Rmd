@@ -337,10 +337,11 @@ ln_ref_data <- SeuratDisk::LoadH5Seurat('/yerkes-cifs/runs/scrna_seq_ref/tabula_
 
 ## SingleR can work on merged object, or lapply over captures
 # objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
-singleR_results <- lapply(objs_filt, runSingleR,
-                               ref = ln_ref_data_SingleR,
-                               labels = ln_ref_data_SingleR.labels,
-                               meta.prefix = 'singleR')
+c(obj_filt_mapped, singler_out) %<-% lapply(objs_filt, runSingleR,
+                          ref = ln_ref_data@assays$RNA@data,
+                          labels = ln_ref_data$labels,
+                          meta.prefix = 'ts_lymph',
+                          de.method = 'wilcox')
 ## Output is lists of 2 sets of data: the singleR results, and
 ## the seurat objects with metadata added
 for (cap in names(singleR_results)){
