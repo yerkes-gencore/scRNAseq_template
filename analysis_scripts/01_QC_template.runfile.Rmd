@@ -165,7 +165,7 @@ you get the idea. Set eval=TRUE if you do have vdj data
 
 ## Plot
 
-```{r, fig.width=18, fig.height=4, eval=FALSE}
+```{r, fig.width=18, fig.height=4}
 qc_plot_VDJB <- qc_metrics %>%
   filter(Library.Type=='VDJ B') %>%
   # filter(Category == 'Cells') %>%
@@ -217,7 +217,7 @@ qc_table_VDJB
 ## This only works if all the variables called in the format file 
 ## are in the current environment. Check the format file to tweak
 ## aesthetics 
-rmarkdown::render(here('scripts/scRNAseq_QC_template.format.Rmd'),
-                  output_file = 'scRNAseq_QC.html',
+rmarkdown::render(here('analysis_scripts/01_QC_template.format.Rmd'),
+                  output_file = '01_QC_report.html',
                   output_dir = here('reports'))
 ```
