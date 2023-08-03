@@ -67,9 +67,9 @@ sc <- lapply(soupx_files, function(x){
   runSoupX(x[['unfiltered_mat_path']], x[['filtered_mat_path']], x[['clusters_path']])
 })
 
-saveRDS(sc, here('saved_rds/soupx_results.Rds'))
+saveRDS(sc, here('saved_rds/report-02/soupx_results.Rds'))
 ## always a good idea to reload the saved object to check that it saved ok
-sc <- readRDS(here('saved_rds/soupx_results.Rds'))
+sc <- readRDS(here('saved_rds/report-02/soupx_results.Rds'))
 ```
 
 ```{r}
@@ -117,7 +117,7 @@ objs <- mapply(readCounts10x,
                          'count/sample_filtered_feature_bc_matrix'),
                strip.suffix = FALSE,
                USE.NAMES = TRUE)
-saveRDS(objs, here('saved_rds/raw_captures.Rds'))
+saveRDS(objs, here('saved_rds/report-02/raw_captures.Rds'))
 ## This keeps track of dropped cells etc. through processing steps
 qc_receipts <- list()
 qc_receipts$preprocessing <- lapply(objs, dim)
@@ -204,15 +204,24 @@ qc_receipts$qc_filtering <- lapply(objs_filt, dim)
 ## Check cell cycle
 
 ```{r, include=FALSE}
-## i was unable to get the two-object return method working for this function, 
-## so I ran it twice. theoretically you should be able to run it once and get
-## both objects out
-qc_regression_plots <- lapply(objs_filt, checkCC, cc.genes = cc.genes, what2return = 'plot_list')
-objs_filt <- lapply(objs_filt, checkCC, cc.genes = cc.genes, what2return = 'seurat_obj')
+## If human, cc genes were already loaded with Seurat
+cc.genes
+
+## If mouse data:
+# source(here("R/get_cc_genes-Mus_musculus.R"))
+# cc.genes <- list(s_genes, g2m_genes)
 ```
 
+Score cell cycle phase
+```{r, include=FALSE}
+s.split <- lapply(s.split, scoreCC, s.genes = cc_genes$s.genes, g2m.genes = cc_genes$g2m.genes)
+```
+
+Plot Phase on PCA
 ```{r, fig.width=30, fig.height=15}
-ggarrange(plotlist = lapply(qc_regression_plots, function(x) x$Phase))
+lapply(s.split, plotPCAs, features = "Phase") %>%
+  unlist(recursive = FALSE) %>%
+  ggarrange(plotlist = .)
 ```
 
 ```{}
@@ -272,8 +281,8 @@ doubletfinder_results %>%
 ```
 
 ```{r}
-saveRDS(objs_filt, here('saved_rds/objs_filt.Rds'))
-objs_filt <- readRDS(here('saved_rds/objs_filt.Rds'))
+saveRDS(objs_filt, here('saved_rds/report-02/objs_filt.Rds'))
+objs_filt <- readRDS(here('saved_rds/report-02/objs_filt.Rds'))
 ```
 
 ## Reference mapping
@@ -360,8 +369,8 @@ singleR_heatmap
 ### save object post-mapping
 
 ```{r}
-saveRDS(objs_filt_mapped, here('saved_rds/objs_filt_mapped.Rds'))
-objs_filt_mapped <- readRDS(here('saved_rds/objs_filt_mapped.Rds'))
+saveRDS(objs_filt_mapped, here('saved_rds/report-02/objs_filt_mapped.Rds'))
+objs_filt_mapped <- readRDS(here('saved_rds/report-02/objs_filt_mapped.Rds'))
 ```
 
 ## QC filtering summary
@@ -582,8 +591,8 @@ obj_post_harmony_int <- runIntegration(objs_filt_mapped,
                                        harmony.group.by.vars = c('capID', 'hash.ID'))
 
 
-saveRDS(obj_post_harmony_int,here('saved_rds/obj_post_harmony.Rds'), compress=FALSE)
-obj_post_harmony_int <- readRDS(here('saved_rds/obj_post_harmony.Rds'))
+saveRDS(obj_post_harmony_int,here('saved_rds/report-02/obj_post_harmony.Rds'), compress=FALSE)
+obj_post_harmony_int <- readRDS(here('saved_rds/report-02/obj_post_harmony.Rds'))
 # rm(pbmc.merged)
 gc()
 ```
