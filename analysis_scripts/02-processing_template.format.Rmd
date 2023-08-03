@@ -135,7 +135,9 @@ We plot cells using cell-cycle markers to define principle components
 and look for cells clustering by estimated CC stage.
 
 ```{r, fig.width=30, fig.height=15}
-ggarrange(plotlist = lapply(qc_regression_plots, function(x) x$Phase))
+lapply(s.split, plotPCAs, features = "Phase") %>%
+  unlist(recursive = FALSE) %>%
+  ggarrange(plotlist = .)
 ```
 
 ## Hash demultiplexing
