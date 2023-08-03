@@ -1,0 +1,140 @@
+---
+title: "Identifying cell populations"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 2
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+```
+
+```{=html}
+<style type="text/css">
+ .book .book-body .page-inner {
+   max-width: 3200px;
+ }
+ details > summary {
+  display: list-item;
+}
+</style>
+```
+
+This report shows the work to identify the unique populations of cells
+within the dataset and to classify them. Celltype identification is greatly
+facilitated by marker genes that can be confidently associated with a single
+cell type. If you have marker genes for cells that are of interest to your
+study, please provide them. We can provide additional visualizations that 
+focus on your known markers. This will lend great confidence to the 
+cell classifications we decide on. 
+
+# Clustering
+
+<details><summary>What is clustering?</summary>
+
+We use unsupervised clustering to bin single cells into groups. This approach is
+agnostic to the actual identity of each cell. It is is an approximation based
+on each cell's gene expression profile that tries to bin blends of biological states.
+However, there is lots of noise in single cell data.
+We cannot assume an unsupervised cluster represents an actual 
+biologically distinct or relevant subdivision of a dataset.
+We have to decide the scale at which to define operational groups of cells. We must 
+inspect the cluster and how it relates or differs from the rest of the cells to
+see if it is a meaningful distinction. We can pair the unsupervised
+clustering approach with marker genes or reference annotations to confidently
+identify groups of cells we want to study.
+
+</details> 
+
+<details><summary>What is a cluster tree?</summary>
+
+Unsupervised clustering is an uncertain process. We use
+this diagnostic to try and find a clustering approach that is relatively stable.
+Ideally we select a resolution that includes cell populations that consistently
+cluster out across resolutions. In reality, the initial cluster definitions we
+chose can be subject to change. We may need to split a large group of cells
+to identify specific sub-groups. Or we may need to pool small clusters of indistinguishable 
+populations together for greater power in detecting differential gene expression. 
+This diagnostic can help identify a good working resolution and which clusters
+may lend themselves to splitting or merging. 
+
+This cluster tree diagram shows how subdivisions of cells
+in this study change as the clustering resolution is changed. In general, a higher
+resolution will have a greater number of clusters. In the clustertree, each
+row shows the clusters at a given resolution. The resolution increases
+as you decend the rows. As resolution is increased,
+populations of cells often split into smaller clusters. The arrows flowing out
+of one circle/cluster show where the cells in that cluster at that resolution 
+go in the next resolution. The color and transparency of the arrows indicate
+the total number and proportion of total cells, respectively. Transparent arrows
+show small portions of the cluster moving around. Solid arrows show the majority
+of that cluster is consistent at the new resolution. 
+
+</details>
+
+```{r, fig.height=14, fig.width=14}
+cluster_tree
+```
+
+```{r}
+DimPlot(pbmc.int, pt.size = 0.5)
+```
+
+# Reference celltype prediction
+
+Mapping the predicted cell classes with the unsupervised clusters.
+
+```{r, fig.width=14}
+ggarrange(DimPlot(pbmc.int, group.by = 'singleR.pruned.labels', pt.size = 0.5, label = TRUE),
+  DimPlot(pbmc.int, pt.size = 0.5, label = TRUE),
+  nrow = 1, ncol = 2)
+```
+
+```{r}
+cluster_label_table %>%
+  knitr::kable()
+```
+
+Top genes used in mapping reference annotations
+
+```{r, fig.width = 23, fig.height = 16}
+ggarrange(plotlist = singlerMarker_heatmaps,
+          ncol = 3, nrow = 3)
+```
+
+# Surface markers
+
+```{r, fig.height=8}
+pbmc.heatmaps.adt
+```
+
+# Cluster markers
+
+```{r}
+cluster_marker_DT
+```
+
+# Cluster identities
+
+```{r}
+DimPlot(processed_obj, group.by = 'cluster_labels', label = TRUE, pt.size = 0.5)
+```
+
+Evidence:
+
+* 0. CD4.1+ ADT, reference called CD4
+* 1. CD14+ GEX/ADT, reference called monocytes
+* 2. CD4.1+ ADT, reference called CD4
+* 3. CD16+ ADT, reference called NK
+* 4. CD8a+ ADT/GEX, reference called CD8
+* 5. IgD+ CD3+ HLA-DR+ ADT, reference called B cells
+* 12. PPBP+ GEX, reference called platelets

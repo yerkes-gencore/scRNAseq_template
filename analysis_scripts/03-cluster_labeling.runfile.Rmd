@@ -10,10 +10,14 @@ library(Seurat)
 library(tidyverse)
 library(here)
 library(gencoreSC)
-library(RColorBrewer)
+# library(RColorBrewer)
 library(clustree)
 library(ggpubr)
 library(DT)
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
 ```
 
 
@@ -47,13 +51,18 @@ cluster_tree
 processed_obj <- FindClusters(processed_obj, resolution = )
 ```
 
+```{r}
+DimPlot(processed_obj, pt.size = 0.5)
+```
+
+
 ```{r, fig.width=10, fig.height=6}
 ## if you want to plot some metadata with your new clusters
 clustering_dashboard_plot <- ggarrange(
   DimPlot(processed_obj, group.by = 'hash.ID'),
   DimPlot(processed_obj, group.by = 'seurat_clusters'),
   DimPlot(processed_obj, group.by = 'Phase'),
-  DimPlot(processed_obj, group.by = 'predicted.cell_type_lvl1', label = FALSE),
+  DimPlot(processed_obj, group.by = 'singleR.pruned.labels', label = FALSE),
   nrow = 2, ncol = 2)
 clustering_dashboard_plot
 ```
@@ -102,4 +111,103 @@ cluster_marker_DT <- cluster_markers %>%
     # formatRound(c('pct.1', 'pct.2'), digits = 2) %>%
     # formatSignif(c('p_val', 'p_val_adj'))
 cluster_marker_DT
+```
+
+# Reference annotation predictions
+
+```{r}
+cluster_label_table <- 
+  processed_obj@meta.data %>% 
+  group_by(seurat_clusters) %>%
+  count(singleR.pruned.labels) %>%
+  mutate(pct = round(n / sum(n) * 100, 2)) %>%
+  slice_max(order_by = pct, n = 1) %>%
+  select(-n) 
+cluster_label_table
+```
+
+## Reference prediction markers
+
+```{r, fig.width = 17, fig.height = 12}
+# This could be a nice thing to add to the package if I'm able to ggarrange it
+plotSingleRMarkerHeatmaps <- function(seurat_obj, ref_markers, labels, show_n_markers = 20) {
+  # Plotting aesthetics are much better with a shorter legend title
+  seurat_obj@meta.data <- seurat_obj@meta.data %>%
+    mutate(labels = .data[[labels]])
+  
+  # Convert seurat obj to sce for input to scater::plotHeatmap
+  obj_sce <- seurat_obj %>% 
+    Seurat::as.SingleCellExperiment(assay = "RNA") %>% 
+    scater::logNormCounts()
+  
+  # Find markers from the empirical data to compare to the reference based markers in `ref_markers`
+  empirical.markers <- obj_sce %>%
+    scran::findMarkers(., obj_sce[["labels"]], direction="up")
+  
+  # Plot a separate heatmap for each of the marker sets applied
+  heatmaps <- lapply(names(ref_markers), function(x) {
+    ref_markers_celltype <- unique(unlist(ref_markers[[x]]))
+    m <- match(ref_markers_celltype, rownames(empirical.markers[[x]]))
+    m <- ref_markers_celltype[rank(m) <= show_n_markers]
+    
+    heatmap <- scater::plotHeatmap(obj_sce, order_columns_by = "labels", features = m, 
+                           silent = TRUE, main = x)[[4]]
+    return(heatmap)
+  })
+  names(heatmaps) <- names(ref_markers)
+  return(heatmaps)
+}
+
+# Get markers for each annotation label
+singlerMarkers_all <-  metadata(singler_out)$de.genes
+
+singlerMarker_heatmaps <- plotSingleRMarkerHeatmaps(seurat_obj = processed_obj, 
+                                                    ref_markers = singlerMarkers_all, 
+                                                    labels = "singleR.pruned.labels")
+```
+
+
+```{r, fig.width = 23, fig.height = 16}
+ggarrange(plotlist = singlerMarker_heatmaps,
+          ncol = 3, nrow = 3)
+```
+
+# Surface markers
+
+```{r}
+heatmapClusterADT <- function(x, title, silent = T) {
+  prots <- x@assays$ADT@counts %>% rownames()
+  adt_plot <- cbind(x@meta.data, as.data.frame(t(x@assays$ADT@data))) %>%
+    dplyr::group_by(seurat_clusters) %>%
+    dplyr::summarize_at(.vars = prots, .funs = median) %>%
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames("seurat_clusters")
+  
+  pheatmap::pheatmap(t(adt_plot),
+                     color = viridis::viridis(25, option = "B"),
+                     border_color = NA, silent = silent,
+                     legend = FALSE, treeheight_row = 10, treeheight_col = 10,
+                     fontsize_row = 12, fontsize_col = 12, main = title) %>% 
+    ggplotify::as.ggplot()  +
+    theme(text = element_text(size=60))
+}
+```
+
+```{r, fig.height=8}
+pbmc.heatmaps.adt <- heatmapClusterADT(processed_obj, title = 'ADT Data by cluster')
+pbmc.heatmaps.adt
+```
+
+# Save object
+
+```{r}
+saveRDS(processed_obj, here('saved_rds/obj_IDd_clusters.Rds'))
+```
+
+# Render report
+
+```{r}
+rmarkdown::render(here("analysis_scripts/03-cluster_labeling.format.Rmd"),
+                  output_file = '03-cluster_labeling.html',
+                  output_dir = here('reports'))
 ```

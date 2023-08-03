@@ -5,7 +5,7 @@
 # ## to a package, or otherwise separating it from these other informal,
 # ## possibly unused functions
 #
-# #### Derrik functions
+## Derrik functions ----
 
 ### Cell migration table ----
 # ## Example code to make table highlighting migration of cells from old
@@ -102,7 +102,7 @@
 # }
 #
 #
-# #### Micah functions
+## Micah functions ----
 #
 # # This is a hacky way to assign more than one output from a function to different objects
 # # This saves memory and cleans up code when returning a large seurat obj along with plots

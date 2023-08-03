@@ -18,6 +18,7 @@ knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
                       fig.align = 'center')#, include=FALSE)
+set.seed(45)
 ```
 
 ```{}
@@ -55,6 +56,12 @@ if (config$alignmentDir == 'tools/templates/example_data/sc_ADT+GEX+HTO'){
 
 ## soupX
 
+```{}
+Running soupX requires the unfiltered matrices as well as the filtered
+outputs from Cellranger
+```
+
+
 ```{r}
 ## Finding files for SoupX, could also manually specify
 ## sometimes the pattern is different based on cellranger version
@@ -83,7 +90,7 @@ soupx_results <- data.table::rbindlist(lapply(sc, extractSoupXContamEst), idcol 
 soupx_results
 ```
 
-```{r}
+```{r, eval = FALSE}
 ## The replay plot function bugs with html_notebook,
 ## will only show in viewer window if you execute it from console
 ## https://github.com/rstudio/rstudio/issues/5648
@@ -92,7 +99,7 @@ sc$R1$plot
 sc$R4$plot
 ```
 
-```{r}
+```{r, eval = FALSE}
 ## See highly affected genes
 plotSoupXGeneAdjustments(sc$R1, hide_ensembl = TRUE, ens_pattern = '^ENS')
 plotSoupXGeneAdjustments(sc$R4, hide_ensembl = TRUE, ens_pattern = '^ENS')
@@ -112,12 +119,15 @@ objs <- mapply(readCounts10x,
                file.path(config$rootDir,
                          config$alignmentDir, 
                          samplesheet$FileID,
-                         'outs/per_sample_outs/', 
+                         'outs/per_sample_outs', 
                          samplesheet$FileID, 
-                         'count/sample_filtered_feature_bc_matrix'),
+                         'count/sample_feature_bc_matrix.h5'),
                strip.suffix = FALSE,
+               format = 'h5',
                USE.NAMES = TRUE)
+
 saveRDS(objs, here('saved_rds/report-02/raw_captures.Rds'))
+
 ## This keeps track of dropped cells etc. through processing steps
 qc_receipts <- list()
 qc_receipts$preprocessing <- lapply(objs, dim)
@@ -139,16 +149,91 @@ objs <- lapply(objs, function(sample){
 ```{}
 Rather than using the min.cells argument of readCounts10x, I prefer to separate
 this step out. This has the benefit of 1) allowing you to slot in the soupX
-adjusted counts easily and 2) more explicitly seeing the impact of this step
+adjusted counts easily and 2) more explicitly seeing the impact of this step.
+You may not need to do this if you are interested in low abundance genes,
+but it can improve memory use and run speed for some things. 
 ```
 
 ```{r}
 ## only genes appearing in at least `min.cells` cells will be kept
-objs <- lapply(objs, filterLowGenes, min.cells = 100, assay = 'RNA', calculate_only = FALSE)
+## Set calculate_only to FALSE to actually remove them
+objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_only = TRUE)
+objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_only = FALSE)
 qc_receipts$remove_low_genes <- lapply(objs, dim)
 ```
+## Hash demultiplexing
 
-## Removing low count cells
+```{}
+Not needed for all studies
+```
+
+```{r}
+HTO_table <- read.csv(here('config/HTO_table.csv')) %>%
+  mutate(Hashtag = paste0('Hash', substr(Hashtag, 9, 10))) %>%
+  column_to_rownames('Sample')
+## Labels need to be a named list
+HTO_labels <- setNames(rownames(HTO_table), HTO_table$Hashtag)
+```
+
+```{r}
+objs <- lapply(objs, demuxAntibodyData, labels = HTO_labels, assay = 'ADT')
+```
+
+```{r}
+objs <- lapply(objs, subset, subset = HTO_classification != 'Negative')
+qc_receipts$remove_negative_gems <- lapply(objs, dim)
+```
+
+
+## Doublet detection scDblFinder
+
+```{r, eval = FALSE}
+## Doublet detection requires super low-count cells to be removed. If you get
+## errors saying 'Size factors should be positive', try removing low count cells .The
+## vignette for scDblFinder suggests removing cells with less than 200 reads.
+# objs <- lapply(objs, subset, subset = nCount_RNA > 200)
+```
+
+```{r}
+library(scDblFinder)
+run_scDblFinder <- function(obj,
+                            cores=1, 
+                            knownDoublets=NULL,
+                            knownUse=NULL,
+                            nfeatures = 2000,
+                            ...){
+  if (cores > 1){
+    bp <- BioCParallel::MulticoreParam(cores, RNGseed=45)
+  } else {
+    bp <- BiocParallel::SerialParam()
+  }
+  
+  if (!is.null(knownDoublets)){
+    if (is.null(knownUse)){
+      errorCondition('Specify how you want known doublets to be used with "knownUse"')
+    }
+  }
+  obj.sce <- Seurat::as.SingleCellExperiment(obj)
+  obj.sce <- scDblFinder::scDblFinder(obj.sce, 
+                                      knownDoublets = knownDoublets,
+                                      knownUse = knownUse,
+                                      BPPARAM=bp,
+                                      nfeatures = nfeatures, ...)
+  obj$scDblFinder.score <- obj.sce$scDblFinder.score
+  obj$scDblFinder.class <- obj.sce$scDblFinder.class
+  obj
+}
+objs <- lapply(objs, run_scDblFinder)
+```
+
+```{r}
+## Remove doublets
+objs <- lapply(objs, subset, subset = scDblFinder.class == 'singlet')
+qc_receipts$doublet_removal <- lapply(objs, dim)
+```
+
+
+## Removing low quality cells
 
 ```{}
 This approach tests filtering cells based on cutoffs, outlier detection, or
@@ -165,8 +250,8 @@ objs <- lapply(objs,
 
 ```{r}
 ## Define your thresholds. Helper function generate_cutoffs will 
-## initialize a list using outlier detection
-cutoffs <- lapply(objs, generate_cutoffs)
+## initialize a list using outlier detection. 
+cutoffs <- lapply(objs, generate_capture_QC_cutoffs)
 ## you can always edit these directly
 ```
 
@@ -187,7 +272,7 @@ for (filtName in c('input', 'outliers')) {
                                               filtName = filtName,
                                               title = filtName, 
                                               split_by = "capID", 
-                                              color_by = "riboRatio",
+                                              color_by = "mitoRatio",
                                               cutoffs = cutoffs,
                                               facet_colors = TRUE)
 }
@@ -196,9 +281,8 @@ cell_filtering_plots
 
 ```{r}
 ## choose a boolean metadata column to filter on
-objs_filt <- lapply(objs, subset, subset = outliers)
-rm(objs)
-qc_receipts$qc_filtering <- lapply(objs_filt, dim)
+objs <- lapply(objs, subset, subset = outliers)
+qc_receipts$qc_filtering <- lapply(objs, dim)
 ```
 
 ## Check cell cycle
@@ -230,61 +314,6 @@ But the relevant metadata is stored with the object if you want to regress it ou
 downstream.
 ```
 
-## Hash demultiplexing
-
-```{}
-Not needed for all studies
-```
-
-```{r}
-HTO_table <- read.csv(here('config/HTO_table.csv')) %>%
-  mutate(Hashtag = paste0('Hash', substr(Hashtag, 9, 10))) %>%
-  column_to_rownames('Sample')
-## Labels need to be a named list
-HTO_labels <- setNames(rownames(HTO_table), HTO_table$Hashtag)
-```
-
-```{r}
-objs_filt <- lapply(objs_filt, demuxAntibodyData, labels = HTO_labels, assay = 'ADT')
-```
-
-## Doublet finding
-
-```{}
-We do however run doublet removal as a default. If you have hashed data,
-you can specify the ground_truth argument of runDoubletFinder.
-
-Or maybe it shouldn't be the default? And you should map the data on the cluster
-level umaps to make a decision? TBD
-```
-
-
-```{r, include=FALSE}
-objs_filt <- lapply(objs_filt, NormFindVarFeatScaleData, norm_method = 'logNorm')
-objs_filt <- lapply(objs_filt, RunPCA)
-```
-
-```{r}
-objs_filt <- lapply(objs_filt, runDoubletFinder, 
-                    PCs = 30,
-                    sct = FALSE,
-                    cores = 4) ## adjust for your machine
-```
-
-```{r}
-doubletfinder_results <- data.table::rbindlist(
-  lapply(objs_filt, function(x) {
-    as.list(table(x$DF_classifications))
-  }), idcol = 'Sample')
-doubletfinder_results %>%
-  knitr::kable()
-```
-
-```{r}
-saveRDS(objs_filt, here('saved_rds/report-02/objs_filt.Rds'))
-objs_filt <- readRDS(here('saved_rds/report-02/objs_filt.Rds'))
-```
-
 ## Reference mapping
 
 ```{}
@@ -293,68 +322,27 @@ to run this way so I'd like to have it done prior to the 'analysis' so that
 object is stable. 
 ```
 
-### Azimuth
 
-```{}
-Azimuth has lots of dependencies and can be harder to use, you may
-prefer to use singleR instead
-```
-
-```{r}
-objs_filt_mapped <- lapply(objs_filt, 
-                    RunAzimuth,
-                    reference = 'bonemarrowref', ## A seurat/Azimuth reference dataset
-                    umap.name = 'refUMAP.bm')    ## name for reference UMAP added to query data
-for (obj in names(objs_filt_mapped)){
-  DefaultAssay(objs_filt_mapped[[obj]]) <- 'RNA' 
-}
-rm(objs_filt) 
-gc()
-```
-
-#### Plotting mapping results
-
-```{r}
-##devtools::install_github('satijalab/seurat-data')
-bm.ref <- LoadData('bonemarrowref.SeuratData', type = 'azimuth')
-```
-
-```{r, fig.width=15, fig.height=7, warning = FALSE, results='hide', fig.keep='all'}
-
-p1 <- DimPlot(bm.ref$map,
-              reduction = "refUMAP",    ## This will be specific to the reference
-              group.by = "celltype.l2", ## This will be specific to the reference
-              label = TRUE,
-              label.size = 3,
-              raster = FALSE) +
-  NoLegend() + ggtitle("Reference annotations")
-p2 <- DimPlot(objs_filt_mapped$R1,
-              reduction = "refUMAP.bm",           ## umap.name used in RunAzimuth
-              group.by = "predicted.celltype.l2", ## This will be specific to the reference
-              label = TRUE, 
-              label.size = 3, 
-              repel = TRUE) + 
-  NoLegend() + ggtitle("Query transferred labels")
-p1 + p2
-```
 
 ### SingleR
 
 ```{r}
 ## Load a reference dataset in
-ln_ref_data <- SeuratDisk::LoadH5Seurat('/yerkes-cifs/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
+ln_ref_data <- SeuratDisk::LoadH5Seurat('/Volumes/genomelab/illumina/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
 
 ## SingleR can work on merged object, or lapply over captures
 # objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
+
 c(obj_filt_mapped, singler_out) %<-% lapply(objs_filt, runSingleR,
                           ref = ln_ref_data@assays$RNA@data,
                           labels = ln_ref_data$labels,
                           meta.prefix = 'ts_lymph',
                           de.method = 'wilcox')
+
 ## Output is lists of 2 sets of data: the singleR results, and
 ## the seurat objects with metadata added
 for (cap in names(singleR_results)){
-  objs_filt[[cap]] <- singleR_results[[cap]][[1]]
+  objs[[cap]] <- singleR_results[[cap]][[1]]
   singleR_results[[cap]] <- singleR_results[[cap]][[2]]
 }
 ```
@@ -618,3 +606,22 @@ integration_diagnostic_plots <- ggarrange(plot_list$full$Harmony$predicted.cell_
           ncol=2, nrow = 2)
 integration_diagnostic_plots
 ```
+
+
+# Render report
+
+```{r}
+## This only works if all the variables called in the format file 
+## are in the current environment. Check the format file to tweak
+## aesthetics 
+rmarkdown::render(here('analysis_scripts/02_processing_template.format.Rmd'),
+                  output_file = '02_processing_report.html',
+                  output_dir = here('reports'))
+```
+
+# Save RDS
+
+```{r}
+
+```
+
