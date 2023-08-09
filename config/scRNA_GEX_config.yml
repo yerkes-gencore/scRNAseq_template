@@ -1,5 +1,5 @@
 # root dir is base of mounted file system, might change by machine. Include the
 # path upto the 'runs/' folder. All subsequent paths should be relative to this root
-rootDir: '/yerkes-cifs/runs'
+rootDir: '/Volumes/yerkes/genomelab/illumina/runs/'
 # cellranger counts output parent folder
 alignmentDir: 'tools/templates/example_data/sc_ADT+GEX+HTO'
