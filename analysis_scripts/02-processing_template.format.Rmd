@@ -180,26 +180,6 @@ Showing the result
 qc_filtering_results_plot
 ```
 
-
-## Reference mapping {.tabset}
-
-Here we predict cell-types using external reference datasets. In this case,
-a human lymph node atlas was used, so it may not be the most accurate, but
-it can serve as a good starting point for initial identification. These
-predictions will be validated with marker genes and surface markers.
-
-### Top level annotations
-
-```{r, fig.width=14}
-azimuth_plot_lvl1
-```
-
-### More granular predictions
-
-```{r, fig.width=14}
-azimuth_plot_lvl2
-```
-
 ## Capture level metadata clustering {.tabset}
 
 Reviewing some data on a per-capture basis and the natural clustering of each
@@ -221,21 +201,6 @@ ggarrange(plotlist = umaps.rna[["Phase"]], ncol=4, nrow=3,
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
 ```
 
-### Reference annotations (top level)
-
-```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
-ggarrange(plotlist = umaps.rna[["predicted.cell_type_lvl1"]], ncol=4, nrow=3, 
-          common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
-```
-
-### Reference annotations (granular)
-
-```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
-ggarrange(plotlist = umaps.rna[["predicted.cell_type_lvl2"]], ncol=4, nrow=3, 
-          common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
-```
 
 # ADT Processing
 

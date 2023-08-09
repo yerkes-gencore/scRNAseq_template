@@ -314,53 +314,6 @@ But the relevant metadata is stored with the object if you want to regress it ou
 downstream.
 ```
 
-## Reference mapping
-
-```{}
-Somewhat TBD if this belongs in the processing step, it's long but pretty easy
-to run this way so I'd like to have it done prior to the 'analysis' so that
-object is stable. 
-```
-
-
-
-### SingleR
-
-```{r}
-## Load a reference dataset in
-ln_ref_data <- SeuratDisk::LoadH5Seurat('/Volumes/genomelab/illumina/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
-
-## SingleR can work on merged object, or lapply over captures
-# objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
-
-c(obj_filt_mapped, singler_out) %<-% lapply(objs_filt, runSingleR,
-                          ref = ln_ref_data@assays$RNA@data,
-                          labels = ln_ref_data$labels,
-                          meta.prefix = 'ts_lymph',
-                          de.method = 'wilcox')
-
-## Output is lists of 2 sets of data: the singleR results, and
-## the seurat objects with metadata added
-for (cap in names(singleR_results)){
-  objs[[cap]] <- singleR_results[[cap]][[1]]
-  singleR_results[[cap]] <- singleR_results[[cap]][[2]]
-}
-```
-
-#### Plotting mapping results
-
-```{r, fig.width=14}
-singleR_heatmap <- plotScoreHeatmap(singleR_results$Cap1)
-singleR_heatmap
-```
-
-### save object post-mapping
-
-```{r}
-saveRDS(objs_filt_mapped, here('saved_rds/report-02/objs_filt_mapped.Rds'))
-objs_filt_mapped <- readRDS(here('saved_rds/report-02/objs_filt_mapped.Rds'))
-```
-
 ## QC filtering summary
 
 ```{r}
