@@ -5,6 +5,8 @@
 library(Seurat)
 library(here)
 
+## You may not want to run Seurat's implementation of MAST, as it deviates
+## from the original publication's workflow, leaving it as default for now...
 MAST_installed <- require('MAST')
 if (MAST_installed){
   DGE_method <- 'MAST'
