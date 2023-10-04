@@ -50,9 +50,8 @@ rmarkdown::render(here('analysis_scripts/02_processing_template.format.Rmd'),
 
 Dockerized sessions of Rstudio ensure a reproducible architecture for all analyses. 
 There is a dockerfile for the gencore Rstudio image at
-`/yerkes-cifs/runs/tools/rstudio-server/`, or better yet at
-https://github.com/yerkes-gencore/rstudio-server, or even better yet at
-https://hub.docker.com/repository/docker/dgratz100/gencore-singlecell-rstudio/general.
+https://hub.docker.com/repository/docker/yerkesgencore/gencore-singlecell-rstudio.
+
 Using the gencore dockerized Rstudio
 allows use of the Renv cache to avoid re-downloading packages in each container (see the
 next session). We try to keep the dockerfile minimal, but if there are linux dependencies
@@ -64,13 +63,14 @@ You can build the image from the dockerfile using Docker (or Podman)
 ```
 cd /yerkes-cifs/runs/tools/rstudio-server/
 git pull ## make sure the dockerfile is up-to-date!
-podman build -t gencore/rstudio:<your r version here> .
+podman build -t yerkesgencore/gencore-singlecell-rstudio
+:<your r version here> .
 ```
 
 or by just pointing to the dockerhub version
 
 ```
-podman build dgratz100/gencore-singlecell-rstudio
+podman build yerkesgencore/gencore-singlecell-rstudio
 ```
 
 then you can run the container (ideally behind a screen or other session manager
@@ -78,7 +78,7 @@ to avoid random detachments). It can be useful to set `ROOT=TRUE` in case you
 need to install linux dependencies from the terminal.
 
 ```
-podman run -e PASSWORD=password -e ROOT=TRUE -p 8787:8787 dgratz100/gencore-singlecell-rstudio
+podman run -e PASSWORD=password -e ROOT=TRUE -p 8787:8787 yerkesgencore/gencore-singlecell-rstudio
 ```
 
 Note that the port number may need to change to avoid conflicts with other users, 
