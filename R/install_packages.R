@@ -27,57 +27,66 @@ github_packages <- c(
 
 renv::init(restart = FALSE)
 
-for (package in cran_packages){
+for (package in cran_packages) {
   tryCatch(
     {
-      if (!require(package, quietly = FALSE)){
-        renv::install.packages(package)
+      if (!require(package, quietly = TRUE, character.only = TRUE)) {
+        install.packages(package, character.only = TRUE, clean = TRUE)
+        message(paste0(package, ' successfully installed'))
+      } else {
+        message(paste0(package, ' already installed'))
       }
     },
-    error=function(e){
-      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+    error = function(e) {
+      message(paste0('Error installing package ', package, '\nOriginal message:'))
       message(e)
-    },
-    warning=function(w){
-      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
-      message(w)
-    }
+    }#,
+    # warning=function(w){
+    #   message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+    #   message(w)
+    # }
   )
 }
 
-for (package in bioc_packages){
+for (package in bioc_packages) {
   tryCatch(
     {
-      if (!require(package, quietly = FALSE)){
-        renv::install(paste0('bioc::', package))
+      if (!require(package, quietly = TRUE, character.only = TRUE)) {
+        BiocManager::install(package)
+        message(paste0(package, ' successfully installed'))
+      } else {
+        message(paste0(package, ' already installed'))
       }
     },
-    error=function(e){
-      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+    error = function(e){
+      message(paste0('Error installing package ', package, '\nOriginal message:'))
       message(e)
-    },
-    warning=function(w){
-      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
-      message(w)
-    }
+    }#,
+    # warning=function(w){
+    #   message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+    #   message(w)
+    # }
   )
 }
 
-for (package in github_packages){
+for (package in github_packages) {
   tryCatch(
     {
-      if (!require(package, quietly = FALSE)){
-        renv::install(paste0('github::', package))
+      if (!require(package, quietly = TRUE, character.only = TRUE)) {
+        devtools::install_github(paste0('github::', package))
+        message(paste0(package, ' successfully installed'))
+      } else {
+        message(paste0(package, ' already installed'))
       }
     },
-    error=function(e){
-      message(paste0('Error installing package ', lib, '\nOriginal message:'))
+    error = function(e){
+      message(paste0('Error installing package ', package, '\nOriginal message:'))
       message(e)
-    },
-    warning=function(w){
-      message(paste0('Warning installing package ', lib, '\nOriginal message:'))
-      message(w)
-    }
+    }#,
+    # warning=function(w){
+    #   message(paste0('Warning installing package ', lib, '\nOriginal message:'))
+    #   message(w)
+    # }
   )
 }
 
