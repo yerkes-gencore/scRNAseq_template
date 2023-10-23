@@ -1,4 +1,26 @@
-Store accessory functions here (e.g. things that haven't been added to the
-package but would make the analysis scripts less readable)
+Store accessory functions and script here
 
-None of the current files in here are necessary for running the analysis scripts
+----------------------------
+compositional_analysis.ipynb
+----------------------------
+Composition analysis performed with scCODA.
+Used their docker image per their instructions
+https://hub.docker.com/r/wollmilchsau/scanpy_sccoda
+docker run --interactive --tty --rm --name scanpy_sccoda --publish 8888-8892:8888-8892 --volume /yerkes-cifs:/root/host_home --workdir /root wollmilchsau/scanpy_sccoda:latest /bin/bash
+
+then run jl in the image to open jupyter lab
+followed the vignette here
+https://sccoda.readthedocs.io/en/latest/getting_started.html
+
+
+----------------------------
+alternative_workflows.R
+----------------------------
+Keeps a record of code for alternative methods that we may want to use.
+
+----------------------------
+install_packages.R
+----------------------------
+A script that checks all the packages
+needed for the 'default' analysis, and installs them if needed. This could
+facilitate automation later on.
