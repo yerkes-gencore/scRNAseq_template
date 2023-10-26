@@ -24,20 +24,12 @@ knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
 # Load data
 
 ```{r}
-processed_obj <- readRDS(here('saved_rds/obj_final_post_processing.Rds'))
+obj <- readRDS(here('saved_rds/obj_post_harmony.Rds'))
 ```
 
-## Reference mapping
-
-```{}
-Somewhat TBD if this belongs in the processing step, it's long but pretty easy
-to run this way so I'd like to have it done prior to the 'analysis' so that
-object is stable. 
-```
+# Reference mapping
 
 
-
-# SingleR
 
 ```{r}
 ## Load a reference dataset in
@@ -46,7 +38,7 @@ ln_ref_data <- SeuratDisk::LoadH5Seurat('/Volumes/genomelab/illumina/runs/scrna_
 ## SingleR can work on merged object, or lapply over captures
 # objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
 
-c(obj_filt_mapped, singler_out) %<-% lapply(objs_filt, runSingleR,
+c(obj_filt_mapped, singler_out) %<-% runSingleR(obj, 
                           ref = ln_ref_data@assays$RNA@data,
                           labels = ln_ref_data$labels,
                           meta.prefix = 'singleR.out',
@@ -110,7 +102,7 @@ ggarrange(plotlist = singlerMarker_heatmaps,
 # Selecting resolution
 
 ```{r}
-clustree_obj <- processed_obj
+clustree_obj <- obj
 for (res in seq(0.2, 1.5, .1)){
   ## in case you rerun this with different ranges of res
   if (!(paste0('RNA_snn_res.', res) %in% colnames(clustree_obj@meta.data))){
@@ -133,7 +125,7 @@ DimPlot(clustree_obj, group.by = 'RNA_snn_res.1.3')
 
 ```{r}
 ## Chose a resolution to move forward with
-processed_obj <- FindClusters(processed_obj, resolution = )
+obj <- FindClusters(obj, resolution = )
 DimPlot(processed_obj, pt.size = 0.5)
 ```
 
@@ -146,7 +138,7 @@ DimPlot(processed_obj, pt.size = 0.5)
 clustering_dashboard_plot <- ggarrange(
   DimPlot(processed_obj, group.by = 'hash.ID'),
   DimPlot(processed_obj, group.by = 'seurat_clusters'),
-  DimPlot(processed_obj, group.by = 'Phase'),
+  # DimPlot(processed_obj, group.by = 'Phase'),
   DimPlot(processed_obj, group.by = 'singleR.pruned.labels', label = FALSE),
   nrow = 2, ncol = 2)
 clustering_dashboard_plot
@@ -168,7 +160,7 @@ cluster_label_table
 ## Prediction facetplot
 
 ```{r, fig.height=12, fig.width=10, warning = FALSE}
-hpca_facet_plot <- plotRefMapScoresFacet(processed_obj,
+hpca_facet_plot <- plotRefMapScoresFacet(obj,
                       label_column = 'singleR.out.pruned.labels', 
                       label_score_column = 'singleR.out.delta.next',
                       clusters_column = 'cluster_labels')
@@ -178,14 +170,14 @@ hpca_facet_plot
 ## Surface markers
 
 ```{r, fig.height=8}
-heatmaps.adt <- featureHeatmapByCluster(processed_obj, title = 'ADT Data by cluster', assay = 'ADT')
+heatmaps.adt <- featureHeatmapByCluster(obj, title = 'ADT Data by cluster', assay = 'ADT')
 heatmaps.adt
 ```
 
 ```{r}
 ## saving the clustered obj lets you call findMarkers as a background script
 ## see the script at R/findMarkers.R
-saveRDS(processed_obj, file = here('saved_rds/obj_post-initial-clustering.Rds'), compress = FALSE)
+saveRDS(obj, file = here('saved_rds/obj_post-initial-clustering.Rds'), compress = FALSE)
 ```
 
 # cluster markers
