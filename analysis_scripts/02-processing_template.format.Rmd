@@ -31,14 +31,18 @@ details > summary {
 
 # GEX processing
 
-All processing is done on a capture level. We performed standard
-filtering on cells based on mitochondrial and ribosomal gene expression,
-umis, and gene count. We've also calculated metrics for ambient RNA
-contamination and cell-cycle separation without performing
-any correction for them. Finally we perform a doublet detection to identify
-GEMs with more than 1 cell. These may affect the quality and quantity of
-data used for analysis downstream, so we want to discuss whether to
-perform the corrections.
+All processing is done on a capture level. We first calculate estimated ambient 
+RNA contamination to see if correction should be performed. We then filter cells
+based on mitochondrial and ribosomal gene expression, number of UMIs, and number
+of unique features. We then perform a doublet detection algorithm to identify
+GEMs with more than 1 cell. Captures are clustered independently to look for 
+clusters of cells with abnormal values and to determine if doublet removal seems
+beneficial. We examine the affect of predicted cell-cycle on clustering to 
+decide if we should regress cell-cycle.
+
+These decisions may affect the quality and quantity of
+data used for analysis downstream, so we want to discuss whether certain
+steps are appropriate for your study. 
 
 ## soupX
 
@@ -69,6 +73,10 @@ reading](https://academic.oup.com/gigascience/article/9/12/giaa151/6049831)
 
 </details>
 
+We generally look for < 5-10% contamination as a 'good' capture. Captures
+with 10%+ contamination estimates may benefit from ambient RNA correction, but
+you should decide if it seems appropriate for your study. 
+
 ```{r}
 knitr::kable(soupx_results,
              col.names = c('Sample',
@@ -81,10 +89,12 @@ knitr::kable(soupx_results,
 
 ## Removing low count cells {.tabset}
 
-The plots on the left include the threshold (vertical black line) used
-to filter cells for analysis. The plots on the right of nGene vs nUMI
+The plots on the left include show density distributions of metrics on a 
+per-capture basis. The plots on the right of nGene vs nUMI
 show the distribution of cell complexity in a capture with a simple
-best-fit line to show the general trend.
+best-fit line to show the general trend. We generally look for unimodal + 
+normal-ish metric distributions. See the tabs for how distributions change
+as a result of QC. 
 
 Explanation of metrics:
 
@@ -106,7 +116,13 @@ cell_filtering_plots$input
 ### After {.active}
 
 ```{r, fig.width=18, fig.height=15}
-cell_filtering_plots$outlierOnly
+cell_filtering_plots$outliers
+```
+
+## Hash demultiplexing
+
+```{r}
+hto_demux_results
 ```
 
 ## Check cell cycle
@@ -140,11 +156,14 @@ lapply(s.split, plotPCAs, features = "Phase") %>%
   ggarrange(plotlist = .)
 ```
 
-## Hash demultiplexing
+```{r}
+umaps.rna[["Phase_pre_regression"]]
+```
 
 ```{r}
-hto_demux_results
+umaps.rna[["Phase_post_regression"]]
 ```
+
 
 ## Doublet detection
 
@@ -171,6 +190,10 @@ reading](https://www.cell.com/cell-systems/fulltext/S2405-4712(19)30073-0)
 doubletfinder_results %>% knitr::kable()
 ```
 
+```{r}
+umaps_before_doublet_removal
+```
+
 
 ## QC filtering summary
 
@@ -187,20 +210,45 @@ capture prior to integration to inspect for any irregularities.
 
 ### Natural clustering
 
-```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
-ggarrange(plotlist = umaps.rna[["clusters"]], ncol=4, nrow=3, 
-          common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("Seurat clusters", face = "bold", size = 14))
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["clusters"]]
 ```
 
 ### Phase
 
-```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
-ggarrange(plotlist = umaps.rna[["Phase"]], ncol=4, nrow=3, 
-          common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["Phase"]]
 ```
 
+### nUMI
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["nCount_RNA"]]
+```
+
+### nFeature
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["nFeature_RNA"]]
+```
+
+### Complexity
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["log10GenesPerUMI"]]
+```
+
+### riboRatio
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["riboRatio"]]
+```
+
+### mitoRatio
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["mitoRatio"]]
+```
 
 # ADT Processing
 
@@ -209,7 +257,6 @@ We see capture 11 has poor ADT data.
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=9}
 ggarrange(plotlist = adt_umaps, ncol = 4, nrow = 3) 
-
 ```
 
 ## Heatmaps comparing GEX clusters to ADT expression
@@ -226,7 +273,26 @@ ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=3) %>%
 
 Integrating across capture and individual (based on hashing)
 
-```{r, fig.height = 16, fig.width = 16}
-integration_diagnostic_plots
+```{r}
+DimPlot(obj_post_harmony_int, group.by = 'capID', raster = FALSE)
 ```
+
+```{r}
+DimPlot(obj_post_harmony_int, split.by = 'capID', raster = FALSE, ncol = 5)
+```
+
+## Cluster membership tables
+
+Showing the percentage of each capture that landed in a cluster
+
+```{r}
+cap_proportions_DT
+```
+
+Showing the percentage of each cluster that came from a given capture
+
+```{r}
+clus_proportions_DT
+```
+
 
