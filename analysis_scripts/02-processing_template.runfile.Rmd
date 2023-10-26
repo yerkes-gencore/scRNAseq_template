@@ -6,14 +6,16 @@ output: html_document
 ---
 
 ```{r setup, include=FALSE}
-library(Seurat)
-library(tidyverse)
-library(here)
-library(gencoreSC)
 # library(Azimuth)      ## Can be tricky to install, singleR is easier
-library(SingleR)
-library(ggpubr)
 library(BiocParallel)
+library(gencoreSC)
+library(ggpubr)
+library(here)
+library(scDblFinder)
+library(Seurat)
+library(SingleR)
+library(tidyverse)
+
 knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
@@ -126,7 +128,8 @@ objs <- mapply(readCounts10x,
                format = 'h5',
                USE.NAMES = TRUE)
 
-saveRDS(objs, here('saved_rds/report-02/raw_captures.Rds'))
+## Is this even necessary? 
+# saveRDS(objs, here('saved_rds/raw_captures.Rds'))
 
 ## This keeps track of dropped cells etc. through processing steps
 qc_receipts <- list()
@@ -190,12 +193,12 @@ qc_receipts$remove_negative_gems <- lapply(objs, dim)
 ```{r, eval = FALSE}
 ## Doublet detection requires super low-count cells to be removed. If you get
 ## errors saying 'Size factors should be positive', try removing low count cells .The
-## vignette for scDblFinder suggests removing cells with less than 200 reads.
+## vignette for scDblFinder suggests removing cells with less than 200-500 reads.
 # objs <- lapply(objs, subset, subset = nCount_RNA > 200)
 ```
 
 ```{r}
-library(scDblFinder)
+## This should be in the package now
 run_scDblFinder <- function(obj,
                             cores=1, 
                             knownDoublets=NULL,
@@ -225,13 +228,6 @@ run_scDblFinder <- function(obj,
 }
 objs <- lapply(objs, run_scDblFinder)
 ```
-
-```{r}
-## Remove doublets
-objs <- lapply(objs, subset, subset = scDblFinder.class == 'singlet')
-qc_receipts$doublet_removal <- lapply(objs, dim)
-```
-
 
 ## Removing low quality cells
 
@@ -288,8 +284,7 @@ qc_receipts$qc_filtering <- lapply(objs, dim)
 ## Check cell cycle
 
 ```{r, include=FALSE}
-## If human, cc genes were already loaded with Seurat
-cc.genes
+## If human, cc genes were already loaded with Seurat's `cc.genes`
 
 ## If mouse data:
 # source(here("R/get_cc_genes-Mus_musculus.R"))
@@ -298,12 +293,12 @@ cc.genes
 
 Score cell cycle phase
 ```{r, include=FALSE}
-s.split <- lapply(s.split, scoreCC, s.genes = cc_genes$s.genes, g2m.genes = cc_genes$g2m.genes)
+objs <- lapply(objs, scoreCC, s.genes = cc_genes$s.genes, g2m.genes = cc_genes$g2m.genes)
 ```
 
 Plot Phase on PCA
 ```{r, fig.width=30, fig.height=15}
-lapply(s.split, plotPCAs, features = "Phase") %>%
+lapply(objs, plotPCAs, features = "Phase") %>%
   unlist(recursive = FALSE) %>%
   ggarrange(plotlist = .)
 ```
@@ -314,46 +309,13 @@ But the relevant metadata is stored with the object if you want to regress it ou
 downstream.
 ```
 
-## QC filtering summary
-
-```{r}
-qc_filtering_summary <- as.data.frame(t(data.table::rbindlist(qc_receipts)[c(2,6,8,10),]))
-# qc_filtering_summary <- as.data.frame(t(rbind(qc_filtering_summary, use.names = FALSE)))
-colnames(qc_filtering_summary) <- c('Initial', 'post_filtering', 'after_DF', 'final')
-qc_filtering_summary <- qc_filtering_summary %>% 
-  mutate(low_qual_cells = Initial - post_filtering) %>%
-  mutate(bad_gems = post_filtering - final) %>%
-  # mutate(HTO_doublets = after_DF - final) %>%
-  dplyr::select(low_qual_cells, bad_gems, final)
-
-```
-
-```{r, fig.width=8}
-qc_filtering_results_plot <- reshape2::melt(as.matrix(qc_filtering_summary)) %>%
-  ggplot(aes(x = Var1,
-             y = value,
-             group = Var2,
-             fill = Var2)) + 
-  geom_col() +
-  theme_bw() + 
-  labs(x = 'Sample', y = 'Cell count', fill = NULL) +
-  scale_fill_manual(values = c('low_qual_cells' = 'darkred',
-                               'bad_gems' = 'goldenrod',
-                               # 'HTO_doublets' = 'orange',
-                               'final' = 'darkgreen'),
-                    labels = c('Low quality cells',
-                               'Bad GEMs',
-                               # 'HTO Doublets',
-                               'High quality cells'))
-```
-
 ## Clustering
 
 ```{r}
 ## you could specify dimensions per capture, or you could just proceed
 ## with a single dim number for all captures.
 ## Still working out if it's necessary to be this selective
-lapply(objs_filt_mapped, ElbowPlot)
+lapply(objs, ElbowPlot)
 ndims <- list(1:16,1:18,1:16,1:15,1:16,
            1:13,1:10,1:12,1:15,1:16,
            1:15,1:17,1:12,1:15,1:15,
@@ -362,16 +324,16 @@ ndims <- list(1:16,1:18,1:16,1:15,1:16,
 
 
 ```{r}
-objs_filt_mapped <- mapply(FindNeighbors,
-                           objs_filt_mapped,
-                           dims = ndims, 
-                           reduction = 'pca')
-objs_filt_mapped <- mapply(RunUMAP,
-                           objs_filt_mapped,
-                           dims = ndims,
-                           assay = 'RNA',
-                           reduction.name = 'GEX_UMAP')
-objs_filt_mapped <- lapply(objs_filt_mapped, FindClusters)
+objs <- mapply(FindNeighbors,
+               objs,
+               dims = ndims, 
+               reduction = 'pca')
+objs <- mapply(RunUMAP,
+               objs,
+               dims = ndims,
+               assay = 'RNA',
+               reduction.name = 'GEX_UMAP')
+objs <- lapply(objs, FindClusters)
 ```
 
 ### Capture level metadata clustering
@@ -384,33 +346,78 @@ capture-level clusters to identify possible problematic groupings of cells
 
 
 ```{r}
-umpas.rna <- list()
-umpas.rna[["clusters"]] <- plotUMAP_split(objs_filt_mapped,
-                                              group.by = "seurat_clusters",
-                                              label.size=0,
-                                              reduction = 'GEX_UMAP')
+umaps.rna <- list()
+umaps.rna[["clusters"]] <- plotUMAP_split(objs,
+                                          group.by = "seurat_clusters",
+                                          label.size = 0,
+                                          reduction = 'GEX_UMAP')
 ```
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-umaps.rna[["doublets"]] <- objs_filt_mapped %>%
+umaps.rna[["doublets"]] <- objs %>%
   lapply(., function(x) {
     x@meta.data <- x@meta.data %>% mutate(doublets = DF_classifications)
     x
     }) %>%
   plotUMAP_split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-ggarrange(plotlist = umpas.rna[["doublets"]], ncol=6, nrow=6, 
+ggarrange(plotlist = umaps.rna[["doublets"]], ncol=6, nrow=6, 
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
 ```
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-umpas.rna[["Phase"]] <- objs_filt_mapped %>%
+umaps.rna[["Phase"]] <- objs %>%
   plotUMAP_split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-ggarrange(plotlist = umpas.rna[["Phase"]], ncol=6, nrow=6, 
+ggarrange(plotlist = umaps.rna[["Phase"]], ncol=6, nrow=6, 
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
+```
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["nFeature_RNA"]] <- objs %>%
+  plotUMAP_split(., feature = "nFeature_RNA", label.size=0, legend = T, reduction = 'umap')
+
+ggarrange(plotlist = umaps.rna[["nFeature_RNA"]], ncol=5, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nFeature_RNA", face = "bold", size = 14))
+```
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["nCount_RNA"]] <- objs %>%
+  plotUMAP_split(., feature = "nCount_RNA", label.size=0, legend = T, reduction = 'umap')
+
+ggarrange(plotlist = umaps.rna[["nCount_RNA"]], ncol=5, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nCount_RNA", face = "bold", size = 14))
+```
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["log10GenesPerUMI"]] <- objs %>%
+  plotUMAP_split(., feature = "log10GenesPerUMI", label.size=0, legend = T, reduction = 'umap')
+
+ggarrange(plotlist = umaps.rna[["log10GenesPerUMI"]], ncol=5, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("log10GenesPerUMI", face = "bold", size = 14))
+```
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["riboRatio"]] <- objs %>%
+  plotUMAP_split(., feature = "riboRatio", label.size=0, legend = T, reduction = 'umap')
+
+ggarrange(plotlist = umaps.rna[["riboRatio"]], ncol=5, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("riboRatio", face = "bold", size = 14))
+```
+
+```{r, fig.width=12, fig.height=8}
+umaps.rna[["mitoRatio"]] <- objs %>%
+  plotUMAP_split(., feature = "mitoRatio", label.size=0, legend = T, reduction = 'umap')
+
+ggarrange(plotlist = umaps.rna[["mitoRatio"]], ncol=5, nrow=3, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("mitoRatio", face = "bold", size = 14))
 ```
 
 ## Remove doublets
@@ -429,28 +436,72 @@ qc_receipts$doublet_removal <- lapply(objs_filt, dim)
 
 ## Regress cell cycle
 
-```{}
-TODO: make some example code for regressing cell cycle. Ideally it would be done
-after inspecting all QC in concert to decide if necessary. 
+```{r}
+regress_cc <- function(obj, ndim = 30){
+  obj <- Seurat::ScaleData(obj,
+                           vars.to.regress = c("S.Score", "G2M.Score"),
+                           features = Seurat::VariableFeatures(obj))
+  obj <- RunPCA(obj)
+  obj <- FindNeighbors(obj, dims = 1:ndim)
+  obj <- RunUMAP(obj, dims = 1:ndim)
+  obj
+}
 ```
 
+```{r}
+objs_filt <- lapply(objs_filt, regress_cc)
+```
+
+## QC filtering summary
+
+```{r}
+## If you did hash demultiplexing, you may have additional bad gems from removing
+## negatives or doublets identified by HTODemux
+qc_filtering_summary <- as.data.frame(t(data.table::rbindlist(qc_receipts)[c(2,6,8),]))
+colnames(qc_filtering_summary) <- c('Initial', 'qc_filtering', 'doublet_removal')
+qc_filtering_summary <- qc_filtering_summary %>% 
+  mutate(low_qual_cells = Initial - qc_filtering) %>%
+  mutate(bad_gems = qc_filtering - doublet_removal) %>%
+  dplyr::select(low_qual_cells, bad_gems, doublet_removal)
+
+```
+
+```{r, fig.width=8}
+qc_filtering_results_plot <- reshape2::melt(as.matrix(qc_filtering_summary)) %>%
+  ggplot(aes(x = Var1,
+             y = value,
+             group = Var2,
+             fill = Var2)) + 
+  geom_col() +
+  theme_bw() + 
+  labs(x = 'Sample', y = 'Cell count', fill = NULL) +
+  scale_fill_manual(values = c('low_qual_cells' = 'darkred',
+                               'bad_gems' = 'goldenrod',
+                               # 'HTO_doublets' = 'orange',
+                               'doublet_removal' = 'darkgreen'),
+                    labels = c('Low quality cells',
+                               'Bad GEMs',
+                               # 'HTO Doublets',
+                               'High quality cells'))
+qc_filtering_results_plot
+```
 
 # ADT Processing
 
 ```{}
-This whole section has not super robustly tested, losing steam on updating the template
+This whole section has not super robustly tested
 ```
 
 
 ```{r}
-objs_filt_mapped <- lapply(objs_filt_mapped,
-                           NormalizeData,
-                           assay = "ADT",
-                           normalization.method = "CLR", 
-                           margin = 2)
+objs <- lapply(objs,
+               NormalizeData,
+               assay = "ADT",
+               normalization.method = "CLR", 
+               margin = 2) ## Might use 1 for smaller panels
 
 # cluster and run umap
-objs_filt_mapped <- lapply(objs_filt_mapped, function(x) {
+objs <- lapply(objs, function(x) {
   DefaultAssay(x) <- "ADT"
   prots <- x@assays$ADT@counts %>% rownames()
   x <- x %>% 
@@ -469,7 +520,7 @@ objs_filt_mapped <- lapply(objs_filt_mapped, function(x) {
 
 ## UMAPs of ADT expression
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=18}
-adt_umaps <- plotUMAP_split(objs_filt_mapped,
+adt_umaps <- plotUMAP_split(objs,
                              group.by = "seurat_clusters",
                              label.size=0,
                              plot_smaller = T,
@@ -525,41 +576,80 @@ ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=6) %>%
 # Integration
 
 ```{r}
-objs_mapped_merged <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
-obj_post_harmony_int <- runIntegration(objs_filt_mapped,
+obj_post_harmony_int <- runIntegration(objs,
                                        integration_method = 'harmony',
                                        dim.reduct = "rpca",
                                        harmony.group.by.vars = c('capID', 'hash.ID'))
+```
 
+## Cluster membership plots
 
-saveRDS(obj_post_harmony_int,here('saved_rds/report-02/obj_post_harmony.Rds'), compress=FALSE)
-obj_post_harmony_int <- readRDS(here('saved_rds/report-02/obj_post_harmony.Rds'))
-# rm(pbmc.merged)
+```{r}
+DimPlot(obj_post_harmony_int, group.by = 'capID', raster = FALSE)
+```
+
+```{r}
+DimPlot(obj_post_harmony_int, split.by = 'capID', raster = FALSE, ncol = 5)
+```
+
+## Cluster membership tables
+
+Visuals of how well integrated the captures were
+
+```{r}
+integration_table <- table(obj_post_harmony_int$capID, obj_post_harmony_int$seurat_clusters) %>%
+  as.data.frame() %>%
+  reshape2::dcast(Var1 ~ Var2) %>%
+  column_to_rownames('Var1') %>%
+  as.matrix()
+```
+
+```{r}
+cap_proportions_DT <-  DT::datatable(
+  round(100*proportions(integration_table, margin = 1), 1),
+  options = list(pageLength = 15,
+                 searching=FALSE,
+                 ordering=FALSE,
+                 lengthChange = FALSE)) %>%
+  DT::formatStyle(colnames(integration_table),
+                  background = DT::styleColorBar(c(0,100), 'lightblue'))
+cap_proportions_DT
+```
+
+```{r}
+clus_proportions_DT <-  DT::datatable(
+  round(100*proportions(integration_table, margin = 2), 1),
+  options = list(pageLength = 15,
+                 searching=FALSE,
+                 ordering=FALSE,
+                 lengthChange = FALSE)) %>%
+  DT::formatStyle(colnames(integration_table),
+                  background = DT::styleColorBar(c(0,100), 'lightblue'))
+clus_proportions_DT
+```
+
+```{r}
+## Moving cell annotation to the next script, so this function may need to be tweaked
+# plot_list <- list()
+# plot_list <- plotIntegrationDiagnostics(plot_list = plot_list,
+#                                         seurat.obj = obj_post_harmony_int,
+#                                         sample_col = 'capID',
+#                                         subset_id = 'full',
+#                                         integration_name = 'Harmony',
+#                                         cell_labels = 'predicted.cell_type_lvl1',
+#                                         res = c(0.9),
+#                                         pt.size = .1)
+# plot_list$full$Harmony$predicted.cell_type_lvl2 <- plotUmapIntegrated(obj_post_harmony_int, group.by = 'predicted.cell_type_lvl2', label.size = 3, pt.size = .1, title = 'predicted.cell_type_lvl2')
+```
+
+# SaveRDS
+
+```{r}
+saveRDS(obj_post_harmony_int,here('saved_rds/obj_post_harmony.Rds'), compress=FALSE)
+obj_post_harmony_int <- readRDS(here('saved_rds/obj_post_harmony.Rds'))
+# rm(objs)
 gc()
 ```
-
-```{r}
-plot_list <- list()
-plot_list <- plotIntegrationDiagnostics(plot_list = plot_list,
-                                        seurat.obj = obj_post_harmony_int,
-                                        sample_col = 'capID',
-                                        subset_id = 'full',
-                                        integration_name = 'Harmony',
-                                        cell_labels = 'predicted.cell_type_lvl1',
-                                        res = c(0.9),
-                                        pt.size = .1)
-plot_list$full$Harmony$predicted.cell_type_lvl2 <- plotUmapIntegrated(obj_post_harmony_int, group.by = 'predicted.cell_type_lvl2', label.size = 3, pt.size = .1, title = 'predicted.cell_type_lvl2')
-```
-
-```{r}
-integration_diagnostic_plots <- ggarrange(plot_list$full$Harmony$predicted.cell_type_lvl1,
-          plot_list$full$Harmony$predicted.cell_type_lvl2,
-          plot_list$full$Harmony$seurat_clusters$`0.9`,
-          plot_list$full$Harmony$capID,
-          ncol=2, nrow = 2)
-integration_diagnostic_plots
-```
-
 
 # Render report
 
@@ -568,13 +658,7 @@ integration_diagnostic_plots
 ## are in the current environment. Check the format file to tweak
 ## aesthetics 
 rmarkdown::render(here('analysis_scripts/02_processing_template.format.Rmd'),
-                  output_file = '02_processing_report.html',
+                  output_file = '02_QC.html',
                   output_dir = here('reports'))
-```
-
-# Save RDS
-
-```{r}
-
 ```
 
