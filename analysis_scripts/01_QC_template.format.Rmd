@@ -22,7 +22,7 @@ library(kableExtra)   ## Needed if rendering tables
 ```{=html}
 <style type="text/css">
 .book .book-body .page-inner {
-  max-width: 1600px;
+  max-width: 3200px;
   margin-left: auto;
   margin-right: auto;
 }
