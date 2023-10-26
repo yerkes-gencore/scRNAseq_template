@@ -96,7 +96,8 @@ qc_plot_ADT <- qc_metrics %>%
                    `Mean antibody reads usable per cell` = 'Mean antibody reads usable per cell',
                    `Median UMI counts per cell` = 'Median UMI counts per cell'))) +
     theme_bw() +
-    labs(x = 'Sample', y = 'Value', title = 'Antibody Capture')
+    labs(x = 'Sample', y = 'Value', title = 'Antibody Capture') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
 qc_plot_ADT
 ```
 
@@ -133,10 +134,11 @@ qc_plot_GEX <- qc_metrics %>%
     geom_col() + 
     facet_wrap(~Metric.Name, 
                scales='free_y',
-               ncol=2,
+               ncol=3,
                labeller = labeller(Metric.Name = label_wrap_gen(100))) +
     theme_bw() +
-    labs(x = 'Sample', y = 'Value', title = 'GEX')
+    labs(x = 'Sample', y = 'Value', title = 'GEX') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
 qc_plot_GEX
 ```
 
