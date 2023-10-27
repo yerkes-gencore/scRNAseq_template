@@ -86,7 +86,7 @@ cluster_tree
 ```
 
 ```{r}
-DimPlot(pbmc.int, pt.size = 0.5)
+DimPlot(obj, pt.size = 0.5)
 ```
 
 # Reference celltype prediction
@@ -94,8 +94,8 @@ DimPlot(pbmc.int, pt.size = 0.5)
 Mapping the predicted cell classes with the unsupervised clusters.
 
 ```{r, fig.width=14}
-ggarrange(DimPlot(pbmc.int, group.by = 'singleR.pruned.labels', pt.size = 0.5, label = TRUE),
-  DimPlot(pbmc.int, pt.size = 0.5, label = TRUE),
+ggarrange(DimPlot(obj, group.by = 'singleR.pruned.labels', pt.size = 0.5, label = TRUE),
+  DimPlot(obj, pt.size = 0.5, label = TRUE),
   nrow = 1, ncol = 2)
 ```
 
@@ -114,7 +114,7 @@ ggarrange(plotlist = singlerMarker_heatmaps,
 # Surface markers
 
 ```{r, fig.height=8}
-pbmc.heatmaps.adt
+heatmaps.adt
 ```
 
 # Cluster markers
@@ -126,15 +126,6 @@ cluster_marker_DT
 # Cluster identities
 
 ```{r}
-DimPlot(processed_obj, group.by = 'cluster_labels', label = TRUE, pt.size = 0.5)
+DimPlot(obj, group.by = 'cluster_labels', label = TRUE, pt.size = 0.5)
 ```
 
-Evidence:
-
-* 0. CD4.1+ ADT, reference called CD4
-* 1. CD14+ GEX/ADT, reference called monocytes
-* 2. CD4.1+ ADT, reference called CD4
-* 3. CD16+ ADT, reference called NK
-* 4. CD8a+ ADT/GEX, reference called CD8
-* 5. IgD+ CD3+ HLA-DR+ ADT, reference called B cells
-* 12. PPBP+ GEX, reference called platelets

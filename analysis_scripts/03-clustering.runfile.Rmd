@@ -220,10 +220,44 @@ cluster_marker_DT <- cluster_markers %>%
 cluster_marker_DT
 ```
 
+# Assigning celltypes
+
+```{r}
+cluster_identities <- c(
+  '0. ', #0
+  '1. ', 
+  '2. ', 
+  '3. ',    
+  '4. ',    
+  '5. ',      #5
+  '6. ',        
+  '7. ', 
+  '8. ',    
+  '9. ',    
+  '10. ', #10
+  '11. ',
+  '12. ',
+  '13. ', 
+  '14. ', 
+  '15. ', #15
+  '16. ',
+  '17. '
+)
+obj$cluster_labels <- plyr::mapvalues(
+  obj$seurat_clusters, 
+  from = levels(obj$seurat_clusters),
+  to = cluster_identities
+)
+```
+
+```{r}
+DimPlot(obj, group.by = 'cluster_labels')
+```
+
 # Save object
 
 ```{r}
-saveRDS(processed_obj, here('saved_rds/obj_IDd_clusters.Rds'))
+saveRDS(obj, here('saved_rds/obj_post_clustering.Rds'))
 ```
 
 # Render report
