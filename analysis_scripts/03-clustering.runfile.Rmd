@@ -12,6 +12,7 @@ library(here)
 library(gencoreSC)
 # library(RColorBrewer)
 library(clustree)
+library(UCell)
 library(ggpubr)
 library(DT)
 knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
@@ -29,20 +30,20 @@ obj <- readRDS(here('saved_rds/obj_post_harmony.Rds'))
 
 # Reference mapping
 
-
-
 ```{r}
 ## Load a reference dataset in
-ln_ref_data <- SeuratDisk::LoadH5Seurat('/Volumes/genomelab/illumina/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
+ref <- SeuratDisk::LoadH5Seurat('/Volumes/genomelab/illumina/runs/scrna_seq_ref/tabula_sapiens/ts_lymph_downsampled_copy.h5Seurat')
+## or use celldex
+#ref <- celldex::MonacoImmuneData()
 
 ## SingleR can work on merged object, or lapply over captures
 # objs_filt_mapped <- merge(objs_filt_mapped[[1]], objs_filt_mapped[2:length(objs_filt_mapped)])
 
 c(obj, singleR_results) %<-% runSingleR(obj, 
-                          ref = ln_ref_data@assays$RNA@data,
-                          labels = ln_ref_data$labels,
-                          meta.prefix = 'singleR.out',
-                          de.method = 'wilcox')
+                                        ref = ref@assays$RNA@data,
+                                        labels = ref$labels,
+                                        meta.prefix = 'singleR.out',
+                                        de.method = 'wilcox')
 
 ```
 
@@ -144,7 +145,7 @@ clustering_dashboard_plot <- ggarrange(
 clustering_dashboard_plot
 ```
 
-# Reference annotation predictions
+## Reference predictions by cluster
 
 ```{r}
 cluster_label_table <- 
@@ -157,20 +158,20 @@ cluster_label_table <-
 cluster_label_table
 ```
 
-## Prediction facetplot
+### Prediction facetplot
 
 ```{r, fig.height=12, fig.width=10, warning = FALSE}
-hpca_facet_plot <- plotRefMapScoresFacet(obj,
+ref_facet_plot <- plotRefMapScoresFacet(obj,
                       label_column = 'singleR.out.pruned.labels', 
                       label_score_column = 'singleR.out.delta.next',
                       clusters_column = 'cluster_labels')
-hpca_facet_plot
+ref_facet_plot
 ```
 
 ## Surface markers
 
 ```{r, fig.height=8}
-heatmaps.adt <- featureHeatmapByCluster(obj, title = 'ADT Data by cluster', assay = 'ADT')
+heatmaps.adt <- gencoreSC::featureHeatmapByCluster(obj, title = 'ADT Data by cluster', assay = 'ADT')
 heatmaps.adt
 ```
 
@@ -218,6 +219,38 @@ cluster_marker_DT <- cluster_markers %>%
     # formatRound(c('pct.1', 'pct.2'), digits = 2) %>%
     # formatSignif(c('p_val', 'p_val_adj'))
 cluster_marker_DT
+```
+
+# Known markers
+
+```{r}
+known_markers <- openxlsx::read.xlsx(here('../Notes/Innate Cell Markers.xlsx'))
+known_markers <- unstack(select(known_markers, c(Mmul10.gene.symbol, Celltype)))
+known_markers
+```
+
+```{r}
+known_marker_dotplots <- lapply(names(known_markers),
+                                   function(x) DotPlot(obj, features = known_markers[x]) + 
+                                     theme(axis.text.x = element_text(angle=30, hjust = 1)))
+names(known_marker_dotplots) <- names(known_markers)
+known_marker_dotplots
+```
+
+## Module scores
+
+```{r}
+for (module in names(known_markers)){
+  obj <- UCell::AddModuleScore_UCell(obj, feature = known_markers[module])
+}
+```
+
+```{r, fig.height=9}
+FeaturePlot(obj, features = paste0(names(known_markers), '_UCell'))
+```
+
+```{r, fig.width=12}
+VlnPlot(obj, paste0(names(known_markers), '_UCell'), pt.size = 0, y.max = 1, same.y.lims = TRUE)
 ```
 
 # Assigning celltypes

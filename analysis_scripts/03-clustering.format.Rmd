@@ -99,10 +99,26 @@ ggarrange(DimPlot(obj, group.by = 'singleR.pruned.labels', pt.size = 0.5, label 
   nrow = 1, ncol = 2)
 ```
 
+:::: {class='fluid-row'}
+
+::: {class='col-md-4'}
+
 ```{r}
 cluster_label_table %>%
   knitr::kable()
 ```
+
+:::
+
+::: {class='col-md-8'}
+
+```{r, fig.height=12, fig.width=8}
+ref_facet_plot
+```
+
+:::
+
+::::
 
 Top genes used in mapping reference annotations
 
@@ -117,10 +133,32 @@ ggarrange(plotlist = singlerMarker_heatmaps,
 heatmaps.adt
 ```
 
-# Cluster markers
+# Natural cluster markers
 
 ```{r}
 cluster_marker_DT
+```
+
+# Known markers 
+
+## Dotplots {.tabset}
+
+### cDC1
+
+```{r}
+known_marker_dotplots$cDC1
+```
+
+### cDC2
+
+```{r}
+known_marker_dotplots$cDC2
+```
+
+## Module scores
+
+```{r, fig.height=14, fig.width=10}
+FeaturePlot(obj, features = paste0(names(known_markers), '_UCell'), raster = FALSE)
 ```
 
 # Cluster identities
