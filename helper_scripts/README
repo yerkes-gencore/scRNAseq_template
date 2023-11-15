@@ -6,10 +6,18 @@ compositional_analysis.ipynb
 Composition analysis performed with scCODA.
 Used their docker image per their instructions
 https://hub.docker.com/r/wollmilchsau/scanpy_sccoda
+
+Open the port 
+sudo firewall-cmd --add-port=8888/tcp
+
 docker run --interactive --tty --rm --name scanpy_sccoda --publish 8888-8892:8888-8892 --volume /yerkes-cifs:/root/host_home --workdir /root wollmilchsau/scanpy_sccoda:latest /bin/bash
 
-then run jl in the image to open jupyter lab
-followed the vignette here
+then run `jl` in the image to open jupyter lab
+
+edit the address to have the server address as the domain
+e.g.: sblab-wks05.enprc.emory.edu:8888/lab?token=48aba848d724fadc14367d61456fc16da2c36458c6a19fd5
+
+follow the vignette here
 https://sccoda.readthedocs.io/en/latest/getting_started.html
 
 
