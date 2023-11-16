@@ -167,3 +167,13 @@ FeaturePlot(obj, features = paste0(names(known_markers), '_UCell'), raster = FAL
 DimPlot(obj, group.by = 'cluster_labels', label = TRUE, pt.size = 0.5)
 ```
 
+# Cluster membership tables
+
+```{r}
+cluster_membership_table
+```
+
+```{r}
+cluster_membership_table_2
+```
+

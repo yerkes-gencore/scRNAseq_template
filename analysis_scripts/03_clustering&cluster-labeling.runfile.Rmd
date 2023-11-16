@@ -287,6 +287,38 @@ obj$cluster_labels <- plyr::mapvalues(
 DimPlot(obj, group.by = 'cluster_labels')
 ```
 
+## Cluster membership tables
+
+These will need to be modified/generalized for your metadata variables of interest
+
+```{r}
+cluster_membership_table <- as.data.frame(table(obj$capID, obj$cluster_labels)) %>%
+  reshape2::dcast(Var1 ~ Var2, value.var = 'Freq') %>%
+cluster_membership_table
+```
+
+This can show proportions by row or column in a visual table to quickly
+check for imbalances
+
+```{r}
+cluster_membership_table_2 <- table(obj$previous_labels,
+                           obj$seurat_clusters) %>% 
+  proportions(margin = 2) 
+cluster_membership_table_2 <- round(cluster_membership_table_2 * 100, 1) %>%
+  as.data.frame.matrix()
+
+cluster_membership_table_2 <-  datatable(
+  cluster_membership_table_2,
+  options = list(pageLength = 45,
+                 searching=FALSE,
+                 ordering=FALSE,
+                 lengthChange = FALSE)) %>%
+  DT::formatStyle(names(cluster_membership_table_2),
+                  background = styleColorBar(c(0,100), 'lightblue'))
+cluster_membership_table_2
+```
+
+
 # Save object
 
 ```{r}
