@@ -312,7 +312,10 @@ cluster_membership_table_2 <-  datatable(
   options = list(pageLength = 45,
                  searching=FALSE,
                  ordering=FALSE,
-                 lengthChange = FALSE)) %>%
+                 lengthChange = FALSE,
+                 dom = 'Bfrtip',
+                 buttons = c('copy', 'csv'),
+                 deferRender = TRUE)) %>%
   DT::formatStyle(names(cluster_membership_table_2),
                   background = styleColorBar(c(0,100), 'lightblue'))
 cluster_membership_table_2
