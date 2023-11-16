@@ -296,7 +296,7 @@ saveRDS(obj, here('saved_rds/obj_post_clustering.Rds'))
 # Render report
 
 ```{r}
-rmarkdown::render(here("analysis_scripts/03_clustering.format.Rmd"),
-                  output_file = '03_clustering.html',
+rmarkdown::render(here("analysis_scripts/03_clustering&cluster-labeling.format.Rmd"),
+                  output_file = '03_clustering&cluster-labeling.html',
                   output_dir = here('reports'))
 ```
