@@ -1,0 +1,149 @@
+---
+title: "p23120 CD8 T cell DGE"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+library(DT)
+library(dplyr)
+# library(DESeq2)
+# library(gencoreBulk)
+
+```
+
+# Load seurat obj
+
+```{r}
+obj <- readRDS(here('saved_rds/obj_post_clustering.Rds'))
+```
+
+# Label clusters for composition analysis
+
+```{r}
+cluster_identities <- c(
+  'pDC', #0
+  'pDC',    
+  'cDC2',    
+  'Monocytes',
+  'other DCs',      
+  'pDC',        
+  'cDC1', 
+  'pDC',    
+  'other DCs',    
+  'Activated DCs', #10
+  'other DCs'
+)
+obj$previous_labels <- obj$cluster_labels
+obj$cluster_labels <- plyr::mapvalues(
+  obj$cluster_labels, 
+  from = levels(obj$cluster_labels),
+  to = cluster_identities
+)
+Idents(obj) <- obj$cluster_labels
+```
+
+# Celltype tables
+
+These haven't been generalized. You will have to tweak them to add metadata
+as needed
+
+```{r}
+celltype_count_table <- merge(as.data.frame(table(obj$capID, obj$cluster_labels)) %>%
+  reshape2::dcast(Var1 ~ Var2, value.var = 'Freq'),
+  project_metadata, by.x = 'Var1', by.y = 'Capture') %>%
+  select(-c(Time,Cells,Libraries,ADT_panel,Notes)) %>% 
+  relocate(Var1, Sample.s., ATI, Condition)
+celltype_count_table
+```
+
+```{r}
+celltype_count_table_2 <- celltype_count_table %>%
+  select(-c(Var1, Sample.s.)) %>%
+  group_by(Condition, ATI) %>%
+  summarise_each(list(sum))
+celltype_count_table_2
+```
+
+
+# Generate data
+
+scCoda needs a table with a row for each sample and a column for each 
+metadata variable and cell population you want to model
+
+This will need to be tailored to the metadata you're interested in modeling
+
+```{r}
+comp_table <- obj@meta.data %>% 
+  group_by(full_labels, condition, timepoint, sample) %>%
+  summarise(n = n()) %>%
+  pivot_wider(id_cols = c(sample, condition, timepoint),
+              names_from = full_labels, values_from = n) %>%
+  arrange(sample, timepoint) %>%
+  mutate_all(~replace(., is.na(.), 0))
+write.table(x = comp_table, 
+            file = here('outputs/composition_table.txt'),
+            quote = FALSE,
+            row.names = FALSE, col.names = TRUE, sep = '\t')
+```
+
+# scCoda ouptut
+
+See the README in 'helper_scripts' on how to run the jupyter notebook for scCODA
+
+```{r}
+sccoda_results <- read.csv(here('outputs/scCODA_output.csv'))
+sccoda_results %>% 
+  arrange(desc(Inclusion.probability))
+```
+
+
+## boxplots
+
+```{r}
+is_outlier <- function(x) {
+  return(x < quantile(x, 0.25) - 1.5 * IQR(x) | x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+```
+
+This needs to be generalized, just dumping it here for now as an example
+
+```{r, fig.height=4, warning=FALSE, fig.width=15}
+pre_vs_post_coarse_comp_boxplot <- full_comp_table %>%
+  group_by(full_labels, timepoint) %>%
+  mutate(outlier = ifelse(is_outlier(prop), sample, NA)) %>%
+    mutate(full_labels = factor(full_labels)) %>%
+  mutate(full_labels = relevel(full_labels, 'Other (non-DCs)')) %>%
+  ggplot(aes(x = group, y = prop, group = group, color = group, shape = sample)) + 
+  # ggrepel::geom_text_repel() +
+  # scale_color_manual(values = c('Post' = my_color_pal$pre, 'Pre' = my_color_pal$post)) +
+  geom_boxplot(outlier.colour = NA, show.legend = FALSE) +
+  ggforce::geom_sina(size = 3) +
+  labs(x = element_blank(), y = 'Proportion of sample', color = 'Group',
+       caption = 'Portions are of the total capture for an individual.\n* = significant below 0.05 FDR') +
+  theme_bw() +
+  scale_shape_manual(values = c(1:5))+ 
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+  facet_grid(~ factor(full_labels)) +
+  ## This is known to be significant from the scCODA results
+  geom_signif(data = data.frame(full_labels = 'pDC',
+                                label = '*',
+                                y = .035,
+                                start = 1.5, end = 3.5,
+                                outlier = NA),
+              aes(annotations = label, y_position = y,
+                  xmin = start, xmax = end),
+              inherit.aes = FALSE,
+              tip_length = -0.03,
+              margin_top = -0.02,
+              vjust = 2.5,
+              manual = TRUE, map_signif_level = TRUE)
+pre_vs_post_coarse_comp_boxplot
+ggsave(here('outputs/innate/DC+monocyte/composition_boxplot.png'), height = 4, width = 15)
+```
+
