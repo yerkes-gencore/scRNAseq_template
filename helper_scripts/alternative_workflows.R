@@ -168,3 +168,81 @@
 #                size = 0.1,
 #                labels = pbmc.obj$cluster_labels)
 # ```
+
+## WNN Processing via harmony
+
+# ```{r}
+# DefaultAssay(obj.tcells) <- 'RNA'
+# obj.tcells <- obj.tcells %>%
+#   NormalizeData() %>%
+#   FindVariableFeatures(nfeatures = 2000 + length(blacklist_genes))
+#
+# VariableFeatures(obj.tcells) <- setdiff(VariableFeatures(obj.tcells),
+#                                         blacklist_genes)
+# VariableFeatures(obj.tcells) <- Seurat::VariableFeatures(obj.tcells)[1:2000]
+#
+#
+# obj.tcells <- obj.tcells %>%
+#   ScaleData() %>%
+#   RunPCA(reduction.name = 'rna_pca')
+# ElbowPlot(obj.tcells, reduction = 'rna_pca' , ndims = 50)
+# ```
+#
+#
+# ```{r}
+# DefaultAssay(obj.tcells) <- 'ADT'
+# obj.tcells <- obj.tcells %>%
+#   NormalizeData(normalization.method = 'CLR', margin = 2)
+# # old_varfeat <- VariableFeatures(obj.tcells)
+# # VariableFeatures(obj.tcells) <- rownames(obj.tcells[['ADT']])
+# obj.tcells <- obj.tcells %>%
+#   ScaleData() %>%
+#   RunPCA(reduction.name = 'adt_pca', features = rownames(obj.tcells[['ADT']]))
+# ElbowPlot(obj.tcells, reduction = 'adt_pca')
+# ```
+#
+# ```{r}
+# DefaultAssay(obj.tcells) <- 'RNA'
+# obj.tcells <- harmony::RunHarmony(obj.tcells,
+#                                   group.by.vars = c('capID'),
+#                                   reduction = 'rna_pca',
+#                                   reduction.save = 'harmony_RNA',
+#                                   dims = 1:28,
+#                                   max.iter.harmony = 20,
+#                                   plot_convergance = TRUE)
+# ```
+#
+# ```{r}
+# DefaultAssay(obj.tcells) <- 'ADT'
+# obj.tcells <- harmony::RunHarmony(obj.tcells,
+#                                   group.by.vars = c('capID'),
+#                                   reduction = 'adt_pca',
+#                                   reduction.save = 'harmony_ADT',
+#                                   dims = 1:12)
+# ```
+#
+# ```{r}
+# ElbowPlot(obj.tcells, reduction = 'harmony_RNA', ndims = 50)
+# ElbowPlot(obj.tcells, reduction = 'harmony_ADT', ndims = 50)
+# ```
+#
+#
+# ```{r}
+# obj.tcells <- FindMultiModalNeighbors(obj.tcells,
+#                                       reduction.list = list('harmony_RNA', 'harmony_ADT'),
+#                                       dims.list = list(1:30, 1:11),
+#                                       modality.weight.name = 'RNA.weight',
+#                                       prune.SNN = 1/20)
+# ```
+#
+#
+# ```{r}
+# obj.tcells <- RunUMAP(obj.tcells,
+#                       nn.name = 'weighted.nn',
+#                       reduction.name = 'wnn.umap',
+#                       reduction.key = 'wnnUMAP_')
+# ```
+#
+# ```{r}
+# DimPlot(obj.tcells, reduction = 'wnn.umap', raster = FALSE, label = TRUE)
+# ```
