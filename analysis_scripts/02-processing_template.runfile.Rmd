@@ -165,11 +165,10 @@ objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_on
 objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_only = FALSE)
 qc_receipts$remove_low_genes <- lapply(objs, dim)
 ```
+
 ## Hash demultiplexing
 
-```{}
 Not needed for all studies
-```
 
 ```{r}
 HTO_table <- read.csv(here('config/HTO_table.csv')) %>%
@@ -203,44 +202,15 @@ objs <- lapply(objs, NormFindVarFeatScaleData)
 ```
 
 ```{r}
-## This should be in the package now
-run_scDblFinder <- function(obj,
-                            cores=1, 
-                            knownDoublets=NULL,
-                            knownUse=NULL,
-                            nfeatures = 2000,
-                            ...){
-  if (cores > 1){
-    bp <- BioCParallel::MulticoreParam(cores, RNGseed=45)
-  } else {
-    bp <- BiocParallel::SerialParam()
-  }
-  
-  if (!is.null(knownDoublets)){
-    if (is.null(knownUse)){
-      errorCondition('Specify how you want known doublets to be used with "knownUse"')
-    }
-  }
-  obj.sce <- Seurat::as.SingleCellExperiment(obj)
-  obj.sce <- scDblFinder::scDblFinder(obj.sce, 
-                                      knownDoublets = knownDoublets,
-                                      knownUse = knownUse,
-                                      BPPARAM=bp,
-                                      nfeatures = nfeatures, ...)
-  obj$scDblFinder.score <- obj.sce$scDblFinder.score
-  obj$scDblFinder.class <- obj.sce$scDblFinder.class
-  obj
-}
 objs <- lapply(objs, run_scDblFinder)
 ```
 
 ## Removing low quality cells
 
-```{}
 This approach tests filtering cells based on cutoffs, outlier detection, or
 both. Nothing is done to the data initially, so you can decide which filtering
 regime to use. 
-```
+
 
 ```{r}
 objs <- lapply(objs,
@@ -360,11 +330,8 @@ umaps_before_doublet_removal <- ggarrange(plotlist = umaps.rna[["doublets"]], nc
   annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
 ```
 
-```{}
 Moved this to the end to make it more intentional, and you can see how doublets
 are clustering in your data prior to removing
-```
-
 
 ```{r}
 ## This will remove doublets
@@ -618,9 +585,9 @@ heatmapClusterADT <- function(x,
 # })
 
 adt_heatmaps <- lapply(
-  seq_along(objs_filt_mapped),
-  function(i, x=objs_filt_mapped) {
-    heatmapClusterADT(objs_filt_mapped[[i]], title = names(objs_filt_mapped)[[i]])
+  seq_along(objs),
+  function(i, x=objs) {
+    heatmapClusterADT(objs[[i]], title = names(objs)[[i]])
 })
 ```
 
