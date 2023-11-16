@@ -1,5 +1,5 @@
 ---
-title: "p23120 Innate NK DGE"
+title: "MAST DGE"
 author: "ENPRC Genomics Core"
 date: "`r Sys.Date()`"
 output: html_document
@@ -17,4 +17,337 @@ library(dplyr)
 # library(DESeq2)
 # library(gencoreBulk)
 
+```
+
+# Functions
+
+```{r}
+vln_plot_facet_individual <- function(obj,
+                         genes,
+                         assay = 'RNA',
+                         subset = NULL,
+                         subset_var = 'seurat_clusters',
+                         grouping_var,
+                         groups,
+                         filter_zeros = TRUE){
+  if (!is.null(subset)){
+    obj <- obj[,obj@meta.data[[subset_var]] %in% subset]
+  }
+  mat_to_plot <- reshape2::melt(as.matrix(obj@assays[[assay]]@data))
+  mat_to_plot <- mat_to_plot %>% filter(.data[['Var1']] %in% genes)
+  mat_to_plot <- merge(mat_to_plot,
+                       obj@meta.data %>%
+                         as.data.frame() %>%
+                         dplyr::select(.data[[grouping_var]], sample),
+                       by.x = 'Var2', by.y = 0)
+  mat_to_plot[[grouping_var]] <- factor(mat_to_plot[[grouping_var]],
+                                        levels = groups)
+  mat_to_plot <- mat_to_plot %>%
+    filter(.data[[grouping_var]] %in% groups)
+
+  if (filter_zeros) {mat_to_plot <- mat_to_plot %>% filter(.data[['value']] != 0)}
+
+  ggplot2::ggplot(mat_to_plot,
+                  aes(x = .data[[grouping_var]],
+                      y = .data[['value']],
+                      group = .data[[grouping_var]],
+                      color = .data[['sample']])) +
+    # geom_jitter() +
+    ggplot2::geom_violin(draw_quantiles = 0.5) +
+    ggforce::geom_sina(size = 0.5, alpha = 1) +
+    ggplot2::facet_wrap(~`sample`)+#, scale='free_y') +
+    ggplot2::theme_bw() +
+    ggplot2::labs(caption = paste0('Showing expression of ', genes, 
+                                   if(!is.null(subset)) {paste0('Showing expression of ', subset, ' cells\n')},
+                                   if(!is.null(filter_zeros)) {'Only showing cells with non-zero expression'}),
+                  y = 'Expression')
+}
+```
+
+```{r cell_prop_functions}
+calc_pct_expressed <- function(obj = obj.sce, features, cells, thresh.min = 0){
+  round(
+    x = rowSums(x = assays(obj[features, cells])$counts > thresh.min) /
+      length(x = cells),
+    digits = 3
+  )
+}
+
+find_cells_in_group <- function(obj = obj.sce, celltype, condition = NULL, timepoint = NULL){
+  obj.metadata <- as.data.frame(colData(obj))
+  obj.sub <- obj.metadata[obj.metadata$cluster_labels == celltype, ]
+  if (!is.null(condition)){
+    obj.sub <- obj.sub[obj.sub$condition == condition,]
+  }
+  if (!is.null(timepoint)){
+    obj.sub <- obj.sub[obj.sub$timepoint == timepoint,]
+  }
+  return(rownames(obj.sub))
+}
+```
+
+# Load Data
+
+```{r}
+obj <- readRDS(here('saved_rds/obj_post_clustering.Rds'))
+```
+
+## Subset data?
+
+You may only want to run DGE on select populations
+
+```{r}
+obj <- subset(obj, subset = cluster_labels == '<Cluster or label to drop>', invert = TRUE)
+obj@meta.data <- droplevels(obj@meta.data)
+```
+
+# MAST Fit
+
+I set this to check for an existing fit object first
+so you don't accidentally rerun it if not needed.
+This can take a while if you have many cells or celltypes
+
+```{r}
+mast_fit_filepath <- here('saved_rds/mast-results.rds')
+
+if (file.exists(mast_fit_filepath)) {
+  print('Existing RDS object found at specified path, not rerunning model fit')
+  zlm_fits <- readRDS(here('saved_rds/mast-results.rds'))
+} else {
+  print('No saved RDS found at specified path, running model fit')
+  zlm_fits <- list()
+  # modify this if your populations labels are in a different metadata col
+  for (celltype in levels(obj$cluster_labels)){
+    # Create a subsetted object for each cell population of interest
+    obj.sce_sub <- subset(obj, cluster_labels == celltype)
+    obj.sce_sub@meta.data <- droplevels(obj.sce_sub@meta.data)
+    obj.sce_sub <- gencoreSC::prepare_MAST_obj(obj.sce_sub, min.cells = 150)
+    obj.sce_sub <- SceToSingleCellAssay(obj.sce_sub)
+    
+    # Define your model here. Note that you should include the CDR term 
+    # (which is calculated in `gencore::prepare_MAST_obj()`)
+    # per the manuscript for MAST, as this accounts for 
+    # lots of technical and biological variability
+    zlm_fits[[celltype]] <- zlm(
+      ~ cdr +
+        condition +
+        timepoint +
+        condition:timepoint +
+        (1|capID),
+      obj.sce_sub,
+      method = 'glmer',
+      ebayes = FALSE,
+      exprs_values = 'logcounts',
+      fitArgsD = list(nAGQ=0),
+      parallel = TRUE,
+      silent = TRUE)
+  }
+  saveRDS(zlm_fits, here('saved_rds/mast-results.rds'))
+}
+
+```
+
+# Specify contrasts
+
+As I (DG) understand how MAST calculates LogFC, I think the correct way to
+specify contrasts is with the expanded terms for a given contrast. It might
+not be necessary, but it also cleans up any confusion about what terms are being
+included and cancelled out. There's also some weird stuff done internally for their
+functions where they add the intercept to some parts and not others, so it gets
+confusing and I'd prefer to just make everything explicit and let them cancel out
+numerically if they should.
+
+Anecdotally, these values made more sense too when
+looking at visuals like violin plots, compared to values from LFC calculations
+with simplified formulas. It is possible I simply made errors in my specifications 
+or interpretations, but for now this has been the most consistent/seemingly
+correct way. 
+
+For example, even if both the numerator and denominator feature the same term 
+and it should cancel out, you should include the term in both the num and denom. 
+You can see the example below. 
+
+```{r split_models_hypothesis_expansion}
+contrast_numerators <- list(
+  ## 1D3, post vs pre
+  '`(Intercept)`+`condition1D3`+`timepointPost`+`condition1D3:timepointPost`',
+  ## control, post vs pre
+  '`(Intercept)`+`timepointPost`',
+  ## post, 1d3 vs cnt
+  '`(Intercept)`+`timepointPost`+`condition1D3`+`condition1D3:timepointPost`',
+  ## pre, 1d3 vs cnt
+  '`(Intercept)`+`condition1D3`',
+  ## delta of delta
+  '`timepointPost`+`condition1D3:timepointPost`')
+
+contrast_denominators <- list(
+  ## 1D3, post vs pre
+  '`(Intercept)`+`condition1D3`',
+  ## control, post vs pre
+  '`(Intercept)`',
+  ## post, 1d3 vs cnt
+  '`(Intercept)`+`timepointPost`',
+  ## pre, 1d3 vs cnt
+  '`(Intercept)`',
+  ## delta of delta
+  '`timepointPost`')
+
+## Give them some tidy names for extracting from lists later
+contrast_names <- c(
+  '1D3.post_vs_pre',
+  'cnt.post_vs_pre',
+  'post.1D3_vs_cnt',
+  'pre.1D3_vs_cnt',
+  '1d3_vs_cnt'
+)
+names(contrast_numerators) <- contrast_names
+names(contrast_denominators) <- contrast_names
+
+
+```
+
+# Extract results
+
+Extract results for each hypothesis and celltype of interest
+
+```{r}
+mast_results <- list()
+for (celltype in names(zlm_fits)) {
+  for (hyp in names(contrast_names)) {
+    res <- gencoreSC::mastWaldTest(hypothesis = contrast_numerators[hyp],
+                                   baseline = contrast_denominators[hyp],
+                                   zlmFit = zlm_fits[[celltype]])
+    test_name <- paste0(celltype, '.', hyp)
+    mast_results[[test_name]] <- res
+  }
+}
+```
+
+## Checking summaries
+
+Note that MAST LFC values are in the same base for the log transformation of the
+data. If you used Seurat NormalizeData, it's probably natural-log transformed,
+so the base is e 
+
+```{r}
+for (result in names(mast_results)){
+  print(result)
+  lfc = 0.25 ## log(2^.25) 
+  print(paste0(nrow(mast_results[[result]] %>% filter(padj < 0.05, logFC > lfc)), ' genes significantly upregulated with lfc > ', lfc))
+  print(paste0(nrow(mast_results[[result]] %>% filter(padj < 0.05, logFC < -lfc)), ' genes significantly downregulated with lfc < -', lfc))
+}
+# lapply(mast_results, summarizeMastResults, lfc = 0)
+```
+
+## Calculate percent expression
+
+MAST doesn't add % expressed to outputs, but it is useful to have. This
+function crudely loops through and adds % expressed for comparisons. 
+It isn't very generalized right now, so you will have to go through manually
+and specify what groups are in your comparisons.
+
+```{r calc_cell_prop}
+for (result_name in names(mast_results)){
+  name_components <- strsplit(result_name, '.', fixed = TRUE)
+  celltype <- condition <- timepoint <- NULL
+  pct1 <- pct2 <- pct3 <- pct4 <- NULL
+  celltype <- name_components[[1]][1]
+  if (name_components[[1]][2] == 'cnt') {
+    condition <- 'Control'
+  } else if (name_components[[1]][2] == '1D3') {
+    condition <- '1D3'
+  } else if (name_components[[1]][2] == 'pre') {
+    timepoint <- 'Pre'
+  } else if (name_components[[1]][2] == 'post') {
+    timepoint <- 'Post'
+  } else if (name_components[[1]][2] == '1d3_vs_cnt') {
+    cells1 <- find_cells_in_group(celltype = celltype, condition = '1D3', timepoint = 'Post') 
+    cells2 <- find_cells_in_group(celltype = celltype, condition = '1D3', timepoint = 'Pre') 
+    cells3 <- find_cells_in_group(celltype = celltype, condition = 'Control', timepoint = 'Post') 
+    cells4 <- find_cells_in_group(celltype = celltype, condition = 'Control', timepoint = 'Pre') 
+  
+    pct1 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells1)
+    pct2 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells2)
+    pct3 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells3)
+    pct4 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells4)
+    
+    mast_results[[result_name]] <- merge(mast_results[[result_name]], data.frame(pct1, pct2, pct3, pct4),
+                                           by.x = 'Row.names', by.y = 0)
+    
+  } else {
+    stop('portion 2 error')
+  }
+  if (length(name_components[[1]])>2) {
+    if (name_components[[1]][3] == 'post_vs_pre'){
+      cells1 <- find_cells_in_group(celltype = celltype, condition = condition, timepoint = 'Post') 
+      cells2 <- find_cells_in_group(celltype = celltype, condition = condition, timepoint = 'Pre') 
+    
+      pct1 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells1)
+      pct2 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells2)
+      
+      mast_results[[result_name]] <- merge(mast_results[[result_name]], data.frame(pct1, pct2),
+                                           by.x = 'Row.names', by.y = 0)
+  
+    } else if (name_components[[1]][3] == '1D3_vs_cnt'){
+      cells1 <- find_cells_in_group(celltype = celltype, condition = '1D3', timepoint = timepoint) 
+      cells2 <- find_cells_in_group(celltype = celltype, condition = 'Control', timepoint = timepoint) 
+    
+      pct1 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells1)
+      pct2 <- calc_pct_expressed(features = mast_results[[result_name]]$Row.names, cells = cells2)
+      
+      mast_results[[result_name]] <- merge(mast_results[[result_name]], data.frame(pct1, pct2),
+                                           by.x = 'Row.names', by.y = 0)
+    
+    } else {
+      stop('portion 3 error')
+    }
+  }
+}
+```
+
+# Checking results
+
+```{r, fig.height=6, fig.width=8}
+genes <- getTopNGenesSC(mast_results[[1]],
+                        min_logFC = 0.1,
+                        N = 6, 
+                        min_padj = 0.05,
+                        pval_col = 'padj', lfc_col = 'logFC', gene_name_col = 'Row.names') 
+
+mast_results[[1]] %>% filter(Row.names %in% genes)
+```
+
+Some helper functions from the gencoreSC package
+
+```{r, fig.height=6, fig.width=8}
+gcoreVlnPlot(obj = obj,
+             genes = genes,
+             assay = 'RNA', 
+             subset_var = 'cluster_labels',
+             subset = 'Monocytes',
+             grouping_var = 'condition.timepoint',
+             groups = c('Pre.1D3', 'Post.1D3', 'Pre.control', 'Post.control'))
+```
+
+
+```{r, fig.height=6, fig.width=8}
+gcoreVlnPlot_facetted(obj,
+                      genes = genes[[1]],
+                      facet_var = 'sample',
+                      subset_var = 'cluster_labels', 
+                      subset = 'Monocytes',
+                      grouping_var = 'condition.timepoint',
+                      groups = c("Pre.1D3","Post.1D3","Pre.control","Post.control"))
+```
+
+# Write sheets
+
+```{r}
+writeDGEResults(mast_results,
+                drop_NA = FALSE,
+                outdir = here('outputs/'),
+                output_name = 'dge.xlsx',
+                p_val_colname = 'p_val_adj',
+                drop_NA = FALSE,
+                write_rownames = TRUE)
 ```
