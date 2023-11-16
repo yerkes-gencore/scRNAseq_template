@@ -1,0 +1,299 @@
+---
+title: "MAST DGE"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 1
+---
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+library(EnhancedVolcano)
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#
+```
+
+```{r vis_functions}
+## Can edit this if you want to adjust visualization outputs
+generateDGEDatatable <- function(result,
+                                 alpha = 0.05,
+                                 lfc_min = round(log(2^.25),3),
+                                 pct_min = 0.25){
+  dge_data <- data.frame(result) %>% 
+    arrange(padj) %>%
+    select(Row.names, logFC, varLogFC, padj, pct1, pct2) %>% 
+    filter(padj < alpha) %>%
+    filter((pct1 > pct_min) | (pct2 > pct_min)) %>%
+    filter(abs(logFC) > lfc_min) %>%
+    # mutate(baseMean=round(baseMean))%>%
+    na.omit() 
+  
+  DT::datatable(dge_data,
+    rownames = FALSE,
+    colnames = c('Gene',
+      'Log2 fold change',
+      'Fold change variance', 
+      'Adj. p-value',
+      '% expressed group1',
+      '% expressed group2'), 
+    # caption='',
+    filter='top',
+    autoHideNavigation = TRUE,
+    extensions = c('Buttons', 'Scroller'),
+    options = list(
+      dom = 'Bfrtip',
+      buttons = c('copy', 'csv'),
+      deferRender = TRUE
+    )) %>%
+    formatRound(c('logFC','varLogFC'), digits=3) %>%
+    formatSignif('padj')
+}
+
+volcano_mast <- function (result, labels = 20, FCcutoff = round(log(2^.25),3), pCutoff = 0.05, 
+    title = NULL, caption = NULL, subtitle = NULL, ...) 
+{
+  rownames(result) <- NULL
+  result <- column_to_rownames(result, 'Row.names')
+    volData <- result[!is.na(result$padj), ]
+    if (is.numeric(labels)) {
+        volData <- volData[order(volData$padj), ]
+        labels <- rownames(volData[1:labels, ])
+    }
+    volplot <- EnhancedVolcano(volData, x = "logFC", 
+        y = "padj", lab = rownames(volData), selectLab = labels, 
+        drawConnectors = TRUE, colConnectors = "lightgrey", pCutoff = pCutoff, 
+        FCcutoff = FCcutoff, title = title, caption = caption, 
+        subtitle = subtitle, ...)
+    return(volplot)
+}
+
+summarizeMastResults <- function(result, lfc = 0.5, p_adj = 0.05){
+  print(paste0(nrow(result %>% filter(padj < p_adj, logFC > lfc)), ' genes significantly upregulated with lfc > ', lfc))
+  print(paste0(nrow(result %>% filter(padj < p_adj, logFC < -(lfc))), ' genes significantly downregulated with lfc < -', lfc))
+}
+```
+
+# Overview
+
+This report shows results from a mixed-model differential expression testing through MAST.
+While it is largely similar to the previous analysis via Seurat's MAST implementation, it improves
+on that in a few regards. Firstly, it actually leverages the fitted model terms for gene expression
+to calculate changes in expression, where Seurat takes the difference of group means. Second, it
+fits a more sophisticated model, including terms for the random effects of individual. 
+
+Results are split by celltype (see the sections in the navigation bar on the left). 
+Within each celltype, the following comparisons are performed:
+
+* 
+* 
+
+Within each comparison, the first listed group is the numerator and the second is the denominator for 
+log-fold change calculations. So for a comparison of `treatment vs control`, a positive log-fold
+change means the gene was more highly expressed in `treatment` than `control`. 
+
+Comparisons are held in tabs within each section. Each tab has the following elements
+
+1. A summary of the significant up and down-regulated genes in each comparison
+2. A volcano plot showing the differentially expressed genes with some visual cutoffs.  
+3. A table of significant and 'interesting' differential gene expression: 
+a subset of results with minimum log-fold change 0.173 (~19% change in expression, natural log base),
+expression in at least 25% of one group in the comparison, and adjusted P value < 0.05.
+The '% expressed' columns show how many cells in each group had non-zero expression for that gene.
+
+For two group comparisons group 1 is the numerator and group 2 is
+the denominator. 
+
+You can download/copy individual tables using the buttons if
+you want to examine a specific comparison without getting bogged down by everything else,
+but we will provide a full spreadsheet of all results. 
+
+4. Violin plot of some of the top significantly differentially expressed genes for
+this comparison, showing the relative log expression per-sample. I arbitrarily 
+chose genes with low P value and high |logFC| to look for obvious differences
+to validate stats shown in the tables. The median is shown on the violin too,
+but be careful about over-interpreting the difference in medians as a 
+directional change. This generally holds true, but not always for skewed distributions.
+
+***
+
+# Final classifications
+
+```{r, fig.width=10, fig.height=8}
+DimPlot(obj, group.by = 'cluster_labels', label = TRUE)
+```
+
+***
+
+# pDC 1 {.tabset}
+
+## 1D3 post-ATI vs pre-ATI
+
+```{r}
+celltype <- 'pDC 1'
+groups <- c('Pre.1D3', 'Post.1D3')
+result <- 'pDC 1.1D3.post_vs_pre'
+result
+```
+
+
+```{r}
+summarizeMastResults(mast_results[[result]], lfc = round(log(2^.25),3))
+summarizeMastResults(mast_results[[result]], lfc = 0)
+```
+
+```{r}
+volcano_mast(mast_results[[result]], pCutoff = 0.05)
+```
+
+```{r}
+generateDGEDatatable(mast_results[[result]])
+```
+
+```{r, fig.width=10, fig.height=8, eval = TRUE, fig.keep='all'}
+genes_to_plot <- getTopNGenesSC(mast_results[[result]], min_logFC = round(log(2^.25),3), N = 5)
+genes_to_plot <- c(genes_to_plot, 'IGLV3-9')
+if (length(genes_to_plot)>1){
+  gcoreVlnPlot(obj = obj,
+             genes = genes_to_plot,
+             assay = 'RNA',
+             subset_var = 'cluster_labels',
+             subset = celltype,
+             grouping_var = 'condition.timepoint',
+             groups = groups)
+} else {
+  cat('Not enough genes to plot (low fold-change or significance)')
+}
+```
+
+## Control post-ATI vs pre-ATI
+
+```{r}
+celltype <- 'pDC 1'
+groups <- c('Pre.Control', 'Post.Control')
+result <- 'pDC 1.cnt.post_vs_pre'
+result
+```
+
+
+```{r}
+summarizeMastResults(mast_results[[result]], lfc = round(log(2^.25),3))
+summarizeMastResults(mast_results[[result]], lfc = 0)
+```
+
+```{r}
+volcano_mast(mast_results[[result]], pCutoff = 0.05)
+```
+
+```{r}
+generateDGEDatatable(mast_results[[result]])
+```
+
+```{r, fig.width=10, fig.height=8, eval = TRUE}
+genes_to_plot <- getTopNGenesSC(mast_results[[result]], min_logFC = round(log(2^.25),3), N = 6)
+if (length(genes_to_plot)>1){
+  gcoreVlnPlot(obj = obj,
+             genes = genes_to_plot,
+             assay = 'RNA',
+             subset_var = 'cluster_labels',
+             subset = celltype,
+             grouping_var = 'condition.timepoint',
+             groups = groups)
+} else {
+  cat('Not enough genes to plot (low fold-change or significance)')
+}
+```
+
+# pDC 2 {.tabset}
+
+## 1D3 post-ATI vs pre-ATI
+
+```{r}
+celltype <- 'pDC 2'
+groups <- c('Pre.1D3', 'Post.1D3')
+result <- 'pDC 2.1D3.post_vs_pre'
+result
+```
+
+
+```{r}
+summarizeMastResults(mast_results[[result]], lfc = round(log(2^.25),3))
+summarizeMastResults(mast_results[[result]], lfc = 0)
+```
+
+```{r}
+volcano_mast(mast_results[[result]], pCutoff = 0.05)
+```
+
+```{r}
+generateDGEDatatable(mast_results[[result]])
+```
+
+```{r, fig.width=10, fig.height=8, eval = TRUE}
+genes_to_plot <- getTopNGenesSC(mast_results[[result]], min_logFC = round(log(2^.25),3), N = 6) 
+if (length(genes_to_plot)>1){
+  gcoreVlnPlot(obj = obj,
+             genes = genes_to_plot,
+             assay = 'RNA', 
+             subset_var = 'cluster_labels',
+             subset = celltype,
+             grouping_var = 'condition.timepoint',
+             groups = groups)
+} else {
+  cat('Not enough genes to plot (low fold-change or significance)')
+}
+```
+
+## Control post-ATI vs pre-ATI
+
+```{r}
+celltype <- 'pDC 2'
+groups <- c('Pre.Control', 'Post.Control')
+result <- 'pDC 2.cnt.post_vs_pre'
+result
+```
+
+
+```{r}
+summarizeMastResults(mast_results[[result]], lfc = round(log(2^.25),3))
+summarizeMastResults(mast_results[[result]], lfc = 0)
+```
+
+```{r}
+volcano_mast(mast_results[[result]], pCutoff = 0.05)
+```
+
+```{r}
+generateDGEDatatable(mast_results[[result]])
+```
+
+```{r, fig.width=10, fig.height=8, eval = TRUE}
+genes_to_plot <- getTopNGenesSC(mast_results[[result]], min_logFC = round(log(2^.25),3), N = 6) 
+if (length(genes_to_plot)>1){
+  gcoreVlnPlot(obj = obj,
+             genes = genes_to_plot,
+             assay = 'RNA', 
+             subset_var = 'cluster_labels',
+             subset = celltype,
+             grouping_var = 'condition.timepoint',
+             groups = groups)
+} else {
+  cat('Not enough genes to plot (low fold-change or significance)')
+}
+```
+
