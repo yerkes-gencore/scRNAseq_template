@@ -74,8 +74,6 @@ knitr::kable(qc_table_GEX) %>%
 
 # VDJ B libraries
 
-## VDJ B
-
 [Explanation of metrics](https://support.10xgenomics.com/single-cell-vdj/software/pipelines/latest/output/metrics)
 
 <details><summary>**Number of Cells With Productive V-J Spanning Pair**</summary>
