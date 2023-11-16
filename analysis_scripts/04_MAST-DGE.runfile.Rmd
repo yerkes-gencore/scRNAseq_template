@@ -1,0 +1,20 @@
+---
+title: "p23120 Innate NK DGE"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+library(DT)
+library(MAST)
+library(msigdbr)
+library(dplyr)
+# library(DESeq2)
+# library(gencoreBulk)
+
+```
