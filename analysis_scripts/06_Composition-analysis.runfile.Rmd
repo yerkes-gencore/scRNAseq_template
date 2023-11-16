@@ -114,7 +114,7 @@ is_outlier <- function(x) {
 This needs to be generalized, just dumping it here for now as an example
 
 ```{r, fig.height=4, warning=FALSE, fig.width=15}
-pre_vs_post_coarse_comp_boxplot <- full_comp_table %>%
+comp_boxplot <- full_comp_table %>%
   group_by(full_labels, timepoint) %>%
   mutate(outlier = ifelse(is_outlier(prop), sample, NA)) %>%
     mutate(full_labels = factor(full_labels)) %>%
@@ -143,7 +143,7 @@ pre_vs_post_coarse_comp_boxplot <- full_comp_table %>%
               margin_top = -0.02,
               vjust = 2.5,
               manual = TRUE, map_signif_level = TRUE)
-pre_vs_post_coarse_comp_boxplot
-ggsave(here('outputs/innate/DC+monocyte/composition_boxplot.png'), height = 4, width = 15)
+comp_boxplot
+ggsave(here('outputs/composition_boxplot.png'), height = 4, width = 15)
 ```
 
