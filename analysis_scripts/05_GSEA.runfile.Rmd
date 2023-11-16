@@ -1,0 +1,111 @@
+---
+title: "GSEA"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(tidyverse)
+library(here)
+# library(gencoreSC) ## Not sure if needed
+library(DT)
+library(msigdbr)
+library(fgsea)
+library(gencoreBulk) ## For plotting functions
+```
+
+# Load DGE results
+
+```{r}
+read_excel_allsheets <- function(filename, tibble = FALSE) {
+    # https://stackoverflow.com/a/12945838/15664425
+    sheets <- readxl::excel_sheets(filename)
+    x <- lapply(sheets, function(X) readxl::read_excel(filename, sheet = X))
+    if(!tibble) x <- lapply(x, as.data.frame)
+    names(x) <- sheets
+    x
+}
+```
+
+```{r}
+dge_results <- read_excel_allsheets(here('outputs/dge.xlsx'))
+```
+
+
+# Load pathways
+
+```{r}
+pathways <- rbind(
+  msigdbr(species = "human", category = 'H'),
+  msigdbr(species = "human", category = 'C2', subcategory = 'CP:REACTOME') %>%
+    filter(gs_name %in% pathways),
+  msigdbr(species = "human", category = 'C2', subcategory = 'CP:KEGG') %>%
+    filter(gs_name %in% pathways),
+  msigdbr(species = "Mus musculus", category = 'C7') %>%
+    filter(grepl('^GOLDRATH', gs_name))
+)
+
+pathways <- msigdb_pathways %>% dplyr::select(gene_symbol, gs_name) %>% unstack()
+```
+
+## Custom pathways
+
+```{r}
+isg <- read.table(here('reference/interferon-stimulated-genes.txt')) %>% 
+  unlist() %>% 
+  unname() %>%
+  list()
+names(isg) <- 'interferon_stimulated_genes'
+```
+
+```{r}
+pathways <- c(hallmark_pathways, isg)
+```
+
+# GSEA
+
+```{r}
+gsea_results <- list()
+for (result in names(dge_results)){
+  ranked_genes <- dge_results[[result]] %>% filter(!is.na(padj))
+  ranked_genes$stat <- ranked_genes$logFC * -log10(ranked_genes$padj + .Machine$double.xmin)
+  ranked_genes <- setNames(ranked_genes$stat, nm = ranked_genes$Row.names)
+  ranked_genes <- sort(ranked_genes)
+  gsea_results[[result]] <- fgsea::fgseaSimple(pathways, ranked_genes, nperm = 500)
+}
+```
+
+## Check GSEA results
+
+```{r}
+gsea_results$`pDC 1.1D3.post_vs_pre` %>%
+  arrange(pval) %>%
+  DT::datatable(rownames = FALSE) %>%
+  formatRound(c('pval', 'padj', 'ES', 'NES'), digits = 3)
+```
+
+# Figures
+
+## Joint DotPlot
+
+```{r}
+combine_GSEA_results <- function(gsea_results,
+                                 pathways){
+   gsea_results <- lapply(gsea_results, function(x){x %>% filter(pathway %in% pathways)})
+   gsea_results <- data.table::rbindlist(gsea_results, idcol='ID')
+}
+joint_GSEA_results <- combine_GSEA_results(gsea_results, names(pathways))
+## You may want to focus on specific pathways
+joint_GSEA_results <- combine_GSEA_results(gsea_results, names(pathways)[c(25,26,27,51,52,53)])
+```
+
+```{r, fig.width=10, fig.height=5}
+gencoreBulk::gseaDotplot_joint(joint_GSEA_results)
+```
+
+# Write results
+
+```{r}
+writefGSEAResults(gsea_results, output_name = 'dc+monocyte_gsea.xlsx', outdir = here('outputs/innate'))
+```
