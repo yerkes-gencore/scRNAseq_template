@@ -1,0 +1,72 @@
+Sequencing outputs were aligned to reference genomes using 10x Genomics Cell Ranger 7.1.0. Gene expression libraries were aligned to the GRCh38-2020-A build provided by 10X. B-cell repertoire sequencing data for bonemarrow samples was aligned to the 10X Human VDJ GRCh38 v7.1.0 reference.  Cellranger gene expression outputs were ran through SoupX [1] to estimate ambient RNA contamination; estimates for all captures were low (<3%), so no correction was performed. Filtered count matrices were read into R through Seurat [2] for further processing and analysis.  
+
+  
+
+Cells were filtered on a per-capture basis by removing outliers (exceeding 4 median absolute deviations) in common qc metrics: UMI count, feature count, mitochondrial gene expression proportion, ribosomal gene expression proportion, and log10 genes per UMI. DoubletFinder [3] was ran to predicted doublets, which were removed from the analysis. Log normalization, scaling, and variable feature identification for gene expression data were performed via Seurat's `NormalizeData`, `ScaleData`, and `FindVariableFeatures` functions. We used Seurat's `CellCycleScoring` to annotate cell cycle phase, but we did not observe an unwanted effect of cell-cycle in our clustering output, so we did not regress cell cycle score during the processing. Surface marker data was normalized via Seurat's CLR method applied across cells.  
+
+  
+
+Gene expression data was integrated across captures using Harmony [4] to identify conserved populations. Unsupervised clustering was performed on the integrated dataset by Seurat's `FindNeighbors` and `RunUMAP` functions. We used Clustree [5] to identify optimal resolution for cluster stability. High-level cell-type identification was provided by SingleR using the PBMC reference dataset from Seurat/10X. We corroborated calls from SingleR [7] using cluster markers calculated via Seurat's `FindMarkers`. We then separated the major subtypes of interest for independent analysis: T and NK cells, B cells, myeloid cells, and dendritic cells.  
+
+  
+
+The subsets of interest were re-integrated via Harmony and reprocessed using a Weighted Nearest Neighbors workflow to cluster cells using both gene expression and surface marker data [6]. We again used Clustree to identify an optimal resolution for each subset. Clusters were annotated based on reference dataset predictions from celldex [7] and cluster-level protein/gene markers.  
+
+  
+
+For each cell-population annotated, we performed differential gene expression using MAST [8]. For each population, we fit a model with fixed terms for 1) dominant Ig clonotype (IgA vs non-IgA) 2) timepoint (pre or post intervention) 3) interaction of clonotype and time, and 4) the cellular discovery rate (as described in the MAST paper), as well as a random effect for individual. The resulting R syntax formula takes the form: 
+
+ 
+clonotype + time + clonotype:time + CDR + (1|individual) 
+
+ 
+
+The differential gene expression output was further analyzed with Gene Set Enrichment Analysis via fGSEA [9] using pathways from the Molecular Signatures Database [10]. Composition analysis was performed using scCODA [11].  
+
+  
+
+  
+
+1. Young, M.D., Behjati, S. (2020). SoupX removes ambient RNA contamination from droplet-based single-cell RNA sequencing data, GigaScience, Volume 9, Issue 12, December 2020, giaa151bioRxiv, 303727, https://doi.org/10.1093/gigascience/giaa151 
+
+  
+
+2. https://www.cell.com/cell/fulltext/S0092-8674(21)00583-3?_returnURL=https%3A%2F%2Flinkinghub.elsevier.com%2Fretrieve%2Fpii%2FS0092867421005833%3Fshowall%3Dtrue 
+
+  
+
+3. https://www.cell.com/cell-systems/fulltext/S2405-4712(19)30073-0 
+
+  
+
+4. https://www.nature.com/articles/s41592-019-0619-0 
+
+  
+
+5. https://academic.oup.com/gigascience/article/7/7/giy083/5052205?login=true 
+
+  
+
+6.  https://doi.org/10.1016/j.cell.2021.04.048 
+
+  
+
+7. Aran D, Looney AP, Liu L, Wu E, Fong V, Hsu A, Chak S, Naikawadi RP, Wolters PJ, Abate AR, Butte AJ, Bhattacharya M (2019). “Reference-based analysis of lung single-cell sequencing reveals a transitional profibrotic macrophage.” Nat. Immunol., 20, 163-172. doi:10.1038/s41590-018-0276-y.  
+
+  
+
+8. MAST: a flexible statistical framework for assessing transcriptional changes and characterizing heterogeneity in single-cell RNA sequencing data G Finak, A McDavid, M Yajima, J Deng, V Gersuk, AK Shalek, CK Slichter et al Genome biology 16 (1), 278 
+
+  
+
+9. Korotkevich G, Sukhov V, Sergushichev A (2019). “Fast gene set enrichment analysis.” bioRxiv. doi:10.1101/060012, http://biorxiv.org/content/early/2016/06/20/060012.  
+
+  
+
+10. https://www.pnas.org/doi/10.1073/pnas.0506580102 
+
+  
+
+11. Büttner, M., Ostner, J., Müller, C.L. et al. scCODA is a Bayesian model for compositional single-cell data analysis. Nat Commun 12, 6876 (2021). https://doi.org/10.1038/s41467-021-27150-6 
+
+ 
