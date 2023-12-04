@@ -350,3 +350,11 @@ writeDGEResults(mast_results,
                 drop_NA = FALSE,
                 write_rownames = TRUE)
 ```
+
+# Render report
+
+```{r}
+rmarkdown::render(here("analysis_scripts/04_MAST-DGE.format.Rmd"),
+                  output_file = 'dge.html',
+                  output_dir = here('reports'))
+```
