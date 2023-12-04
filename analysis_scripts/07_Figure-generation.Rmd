@@ -1,0 +1,129 @@
+---
+title: "Figure Generation"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)   ## Has the read excel function and possibly others
+library(gencoreBulk) ## Has some GSEA vis functions 
+```
+
+# Functions
+
+# Load data
+
+```{r}
+obj <- readRDS(here('saved_rds/obj_post_clustering'))
+```
+
+```{r}
+dge_results <- read_excel_allsheets(here('outputs/dge.xlsx'))
+```
+
+```{r}
+gsea_results <- read_excel_allsheets(here('outputs/gsea.xlsx'))
+```
+
+# Review data
+
+```{r}
+metadata_review_table <- obj@meta.data %>% select(sample, capID, timepoint, condition) %>% unique()
+metadata_review_table
+```
+
+# Celltype tables
+
+```{r}
+celltype_count_table <- merge(as.data.frame(table(obj$capID, obj$cluster_labels)) %>%
+  reshape2::dcast(Var1 ~ Var2, value.var = 'Freq'),
+  metadata_review_table, by.x = 'Var1', by.y = 'Capture') %>%
+  select(-c(Time, Cells, Libraries, ADT_panel, Notes)) %>% 
+  relocate(Var1, Sample.s., ATI, Condition)
+celltype_count_table
+```
+
+```{r}
+celltype_count_table_2 <- celltype_count_table %>%
+  select(-c(Var1, Sample.s.)) %>%
+  group_by(Condition, ATI) %>%
+  summarise_each(list(sum))
+celltype_count_table_2
+```
+
+# Violin plots
+
+```{r, fig.height=6, fig.width=8}
+genes <- getTopNGenesSC(dge_results[[1]], 
+                        min_logFC = 0.1, N = 6,
+                        min_padj = 0.05, 
+                        pval_col = 'padj', lfc_col = 'logFC', gene_name_col = 'Row.names') 
+
+gcoreVlnPlot(obj = obj,
+             genes = genes,
+             assay = 'RNA', 
+             subset_var = 'cluster_labels',
+             subset = 'Monocytes',
+             grouping_var = 'condition.timepoint',
+             groups = c('Pre.1D3', 'Post.1D3', 'Pre.control', 'Post.control'))
+
+gcoreVlnPlot_facetted(obj, genes = genes[[1]], 
+                      subset_var = 'cluster_labels', subset = 'Monocytes',
+                      grouping_var = 'condition.timepoint',
+                      groups = c("Pre.1D3","Post.1D3","Pre.control","Post.control"))
+```
+
+# GSEA
+
+```{r}
+gsea_results$`pDC 1.1D3.post_vs_pre` %>%
+  arrange(pval) %>%
+  DT::datatable(rownames = FALSE) %>%
+  formatRound(c('pval', 'padj', 'ES', 'NES'), digits = 3)
+```
+
+# Joint GSEA dotplots
+
+```{r}
+combine_GSEA_results <- function(gsea_results,
+                                 pathways){
+   gsea_results <- lapply(gsea_results, function(x){x %>% filter(pathway %in% pathways)})
+   gsea_results <- data.table::rbindlist(gsea_results, idcol='ID')
+}
+joint_GSEA_results <- combine_GSEA_results(gsea_results, names(pathways))
+joint_GSEA_results <- combine_GSEA_results(gsea_results, names(pathways)[c(25,26,27,51,52,53)])
+```
+
+```{r, fig.width=10, fig.height=5}
+gencoreBulk::gseaDotplot_joint(joint_GSEA_results)
+```
+
+# Literature markers
+
+Leaving this example for more customized dotplots
+
+```{r}
+innate_markers_v2 <- list(
+  'pDCs' = c('DERL3',	'TIGIT',	'IRF7',	'TCF4',	'GZMB',	'BCL11A',	'LAIR1',	'SLC15A4',	'SULF2',	'SELL',	'ITM2C'),
+  'cDC1s' = c('ID2',	'IRF8',	'BATF3',	'CLEC9A',	'CADM1',	'XCR1',	'DPP4',	'CD226',	'SLAMF8',	'BTLA'),
+  'cDC2s' = c('ZEB2',	'IRF4',	'KLF4',	'CD1C',	'ITGAX',	'FCER1A',	'LILRA2',	'FCGR2B',	'NOTCH2',	'CLEC4A',	'CLEC10A'),
+  'Monocytes' = c('CD14',	'VCAN',	'S100A4',	'TLR2',	'CLEC7A',	'ITGAM',	'CFD',	'FCN1',	'CD163',	'LRP1',	'CTSA',	'FCGR1A'),
+  'activated\nmDCs' = c('CCR7',	'LAMP3',	'MARCKSL1'),
+  'ILC2s' = c('IL7R', 'THY1',	'GATA3',	'IL13',	'RORA',	'TCF7',	'IL1RL1'),
+  'NK cells' = c('XCL1',	'TYROBP',	'PRF1',	'KLRD1',	'KLRF1',	'HOPX',	'STAT4',	'NCAM1',	'FCGR3',	'ENSMMUG00000050862',	'NCR3',	'FCER1G'),
+  'CD8+ T cells' = c('CD3D', 'CD8A', 'ENSMMUG00000003532', 'ENSMMUG00000043332'),
+  'lineage markers' = c('CD4', 'MS4A1', 'CD19', 'BANK1', 'MAMU-DRA', 'MAMU-DRB1')
+)
+```
+
+```{r, fig.width=24, fig.height=6}
+innate_sig_dotplot <- DotPlot(obj, features = innate_markers_v2, group.by = 'cluster_labels', col.min = -1, col.max = 2.5) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  ggstats::geom_stripped_rows() + 
+  scale_colour_gradient2(low = "lightblue", mid = "#FFFF00", high = "red", midpoint = 0.75) 
+innate_sig_dotplot
+```
