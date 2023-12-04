@@ -41,9 +41,7 @@ pathways <- rbind(
   msigdbr(species = "human", category = 'C2', subcategory = 'CP:REACTOME') %>%
     filter(gs_name %in% pathways),
   msigdbr(species = "human", category = 'C2', subcategory = 'CP:KEGG') %>%
-    filter(gs_name %in% pathways),
-  msigdbr(species = "Mus musculus", category = 'C7') %>%
-    filter(grepl('^GOLDRATH', gs_name))
+    filter(gs_name %in% pathways)
 )
 
 pathways <- msigdb_pathways %>% dplyr::select(gene_symbol, gs_name) %>% unstack()
@@ -107,5 +105,5 @@ gencoreBulk::gseaDotplot_joint(joint_GSEA_results)
 # Write results
 
 ```{r}
-writefGSEAResults(gsea_results, output_name = 'dc+monocyte_gsea.xlsx', outdir = here('outputs/innate'))
+writefGSEAResults(gsea_results, output_name = 'gsea.xlsx', outdir = here('outputs'))
 ```
