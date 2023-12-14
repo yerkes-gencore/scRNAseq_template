@@ -1,0 +1,30 @@
+## {{i}}
+
+```{r}
+summary(DESeq_results${{i}})
+```
+
+```{r}
+print(DESeq_results${{i}}@elementMetadata$description[2])
+```
+  
+```{r}
+generateVolcanoPlot(DESeq_results${{i}}, labels = tlr_genes)
+```
+
+```{r}
+generateDGEDatatable(DESeq_results${{i}})
+```
+
+***
+
+<!-- Pair in the format file with code like this for dynamic rendering of chunks -->
+
+<!-- ```{r, results='asis'} -->
+<!-- out <- NULL -->
+<!-- for (i in names(DESeq_results)) { -->
+<!--   out = c(out, knit_expand(text = chunk_text)) -->
+<!-- } -->
+
+<!-- cat(knit_child(text = out, quiet = TRUE), sep = '\n') -->
+<!-- ``` -->
