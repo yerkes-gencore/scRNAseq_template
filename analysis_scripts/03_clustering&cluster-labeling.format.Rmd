@@ -6,9 +6,7 @@ output:
   rmdformats::robobook:
     fig_width: 9
     toc_depth: 2
-editor_options: 
-  markdown: 
-    wrap: 72
+    css: "stylesheets/robobook.css"
 ---
 
 ```{r setup, include=FALSE}
@@ -16,17 +14,6 @@ knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
                       fig.align = 'center')#, include=FALSE)
-```
-
-```{=html}
-<style type="text/css">
- .book .book-body .page-inner {
-   max-width: 3200px;
- }
- details > summary {
-  display: list-item;
-}
-</style>
 ```
 
 This report shows the work to identify the unique populations of cells

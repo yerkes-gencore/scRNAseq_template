@@ -6,6 +6,7 @@ output:
   rmdformats::robobook:
     fig_width: 9
     toc_depth: 3
+    css: "stylesheets/robobook.css"
 ---
 
 ```{r, include=FALSE}
@@ -18,19 +19,6 @@ library(kableExtra)   ## Needed if rendering tables
 <!-- This file will not execute by itself. It should be called within the  -->
 <!-- runfile to render the final report. You can arrange figures, add explanations, -->
 <!-- and do other aesthetic tweaks here. -->
-
-```{=html}
-<style type="text/css">
-.book .book-body .page-inner {
-  max-width: 3200px;
-  margin-left: auto;
-  margin-right: auto;
-}
-details > summary {
-  display: list-item;
-}
-</style>
-```
 
 # Project Description
 

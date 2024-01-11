@@ -6,6 +6,8 @@ output:
   rmdformats::robobook:
     fig_width: 9
     toc_depth: 3
+    css: "stylesheets/robobook.css"
+    
 ---
 
 ```{r setup, include=FALSE}
@@ -14,19 +16,6 @@ knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
                       cache=FALSE, cache.lazy = FALSE,
                       fig.align = 'center')#, include=FALSE)
 library(kableExtra)
-```
-
-```{=html}
-<style type="text/css">
-.book .book-body .page-inner {
-  max-width: 1600px;
-  margin-left: auto;
-  margin-right: auto;
-}
-details > summary {
-  display: list-item;
-}
-</style>
 ```
 
 # GEX processing

@@ -6,6 +6,7 @@ output:
   rmdformats::robobook:
     fig_width: 9
     toc_depth: 1
+    css: "stylesheets/robobook.css"
 ---
 
 ```{r setup, include=FALSE}
@@ -14,26 +15,6 @@ knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
                       fig.align = 'center')#
-```
-
-```{css}
-.book .book-body .page-inner {
-  max-width: 1600px;
-  margin-left: auto;
-  margin-right: auto;
-}
-.book .book-body .page-inner section.normal hr {
-  height: 15px;
-}
-.nav-tabs .active {
-  background-color: #e0e9f0;
-}
-
-.nav-tabs {
-  background-color: #f1fafb;
-  border-bottom: 5px solid #017b8f;
-}
-
 ```
 
 ```{r vis_functions}
