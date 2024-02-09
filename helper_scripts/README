@@ -7,7 +7,7 @@ Composition analysis performed with scCODA.
 Used their docker image per their instructions
 https://hub.docker.com/r/wollmilchsau/scanpy_sccoda
 
-Open the port 
+Open the port
 sudo firewall-cmd --add-port=8888/tcp
 
 docker run --interactive --tty --rm --name scanpy_sccoda --publish 8888-8892:8888-8892 --volume /yerkes-cifs:/root/host_home --workdir /root wollmilchsau/scanpy_sccoda:latest /bin/bash
@@ -20,7 +20,6 @@ e.g.: sblab-wks05.enprc.emory.edu:8888/lab?token=48aba848d724fadc14367d61456fc16
 follow the vignette here
 https://sccoda.readthedocs.io/en/latest/getting_started.html
 
-
 ----------------------------
 alternative_workflows.R
 ----------------------------
@@ -32,3 +31,10 @@ install_packages.R
 A script that checks all the packages
 needed for the 'default' analysis, and installs them if needed. This could
 facilitate automation later on.
+
+----------------------------
+dynamic-chunk-rendering.Rmd
+----------------------------
+Example script that can be paired with a `knitr::knit_expand` or `knitr::knit_child`
+call to dynamically render RMD code. Useful for format files where you will have
+lots of similar chunks with slight tweaks for different contrasts/celltypes.
