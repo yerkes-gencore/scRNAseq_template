@@ -459,7 +459,7 @@ umaps.rna[["clusters"]] <- plotUMAP_split(objs,
 
 ```{r, fig.width=12, fig.height=8}
 umaps.rna[["Phase"]] <- objs %>%
-  plotUMAP_split(., feature = "Phase", label.size=0, legend = T, reduction = 'umap')
+  plotUMAP_split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
 umaps.rna[["Phase"]] <- ggarrange(plotlist = umaps.rna[["Phase"]], ncol=5, nrow=3, 
           common.legend = T, legend = "right") %>%
@@ -467,12 +467,12 @@ umaps.rna[["Phase"]] <- ggarrange(plotlist = umaps.rna[["Phase"]], ncol=5, nrow=
 ```
 
 ```{r, fig.width=12, fig.height=8}
-umaps.rna[["nFeature_RNA"]] <- objs %>%
-  plotUMAP_split(., feature = "nFeature_RNA", label.size=0, legend = T, reduction = 'umap')
+umaps.rna[["nGene_RNA"]] <- objs %>%
+  plotUMAP_split(., feature = "nGene_RNA", label.size=0, legend = T, reduction = 'umap')
 
-umaps.rna[["nFeature_RNA"]] <- ggarrange(plotlist = umaps.rna[["nFeature_RNA"]], ncol=5, nrow=3, 
+umaps.rna[["nGene_RNA"]] <- ggarrange(plotlist = umaps.rna[["nGene_RNA"]], ncol=5, nrow=3, 
           common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("nFeature_RNA", face = "bold", size = 14))
+  annotate_figure(top = ggpubr::text_grob("nGene_RNA", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
