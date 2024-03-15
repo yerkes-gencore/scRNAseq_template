@@ -167,21 +167,16 @@ createPBobj <- function(seurat_obj, aggregate_by = NULL, sampleID = "animalID", 
         lapply(., function(x) {
           dge <- x %>%
             edgeR::Seurat2PB(sample = sampleID, cluster = aggregate_by)
-          print(dge$samples$sample)
           # # Seurat2PB appends cluster name to colname, but we don't want that
           # colnames(dge) <- dge$samples$sample
           colnames(dge) <- str_extract(colnames(dge), pattern = "(^[A-Za-z0-9]*)")
           
-          print(dge$samples$sample)
           # Add sample metadata
           dge$samples <- dge$samples %>%
             select(-group) %>%
             left_join(sample_md, by = c("sample" = sampleID))
-          print(dge$samples$sample)
           dge$samples <- dge$samples[match(sample_md[[sampleID]], dge$samples$sample),]
-          print(dge$samples$sample)
           rownames(dge$samples) <- dge$samples$sample
-          print(dge$samples$sample)
           dge$counts <- dge$counts[,match(sample_md[[sampleID]], colnames(dge$counts))]
           
           # Calculate library normalization factors for use downstream when removing heterscedascity with voom
