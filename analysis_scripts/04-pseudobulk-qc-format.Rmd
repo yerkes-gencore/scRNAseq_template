@@ -1,0 +1,187 @@
+---
+title: "`r project_name`: Report `r report_number` - QC"
+author: |
+  | `r report_author`
+  | ENPRC Genomics Core
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+library(kableExtra)
+```
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+In this report, ``r report_filename_QC``, we walk through the results of running a quality control analysis on the provided data.
+
+# 1 - Study design overview {.tabset}
+
+Below is an overview of the study design. The first tab is a summary of the sample size per factor levels of interest and the second the full sample table.
+
+## Samples sizes per ``r grp_fct`` level
+
+<!-- Note: Template assumes only one factor (in this case a combination of two factors). For repeated measures design, do `group_by(sample, {{ grp_fct }})`. -->
+
+```{r, message=FALSE, warning=FALSE}
+pb[[1]]$dge$samples %>%
+  select("sample", all_of(grp_fct)) %>%
+  as_tibble() %>%
+  group_by(.data[[grp_fct]]) %>%
+    summarize(samples = paste0(sample, collapse = ", "),
+              n_samples = n()) %>%
+  knitr::kable() %>% kableExtra::kable_styling()
+```
+
+## Sample table
+
+```{r, message=FALSE, warning=FALSE}
+pb[[1]]$dge$samples %>%
+  select("sample", all_of(grp_fct)) %>%
+  as_tibble() %>%
+  knitr::kable() %>% kableExtra::kable_styling()
+```
+
+
+# 2 - Cell counts per pseudobulk sample
+
+## Cell counts {.tabset}
+
+### Scatter plot: split by ``r grp_fct``, colored by ``r clust_labs``, y = ``r clust_labs``
+
+A minimum of 10 cells (dashed gray line) is typically required for aggregation into a pseudobulk sample.
+
+```{r scatter_plot, fig.width=12, fig.height=6, warning = FALSE}
+s.full@meta.data %>%
+  group_by(.data[[clust_labs]], .data[[sampleID]], .data[[grp_fct]]) %>%
+    count() %>%
+  ungroup() %>%
+  pivot_wider(names_from = all_of(clust_labs), values_from = n, values_fill = 0) %>%
+  mutate(nCells_total = rowSums(select(., -all_of(sampleID), -all_of(grp_fct)))) %>%
+  pivot_longer(cols = -c(all_of(sampleID), all_of(grp_fct), nCells_total), values_to = "n", names_to = clust_labs) %>%
+  mutate(p = n/nCells_total) %>% 
+  ggplot(aes(y = fct_rev(.data[[clust_labs]]), color = .data[[clust_labs]], x = n)) +
+    geom_point(size=3,  
+               position = position_jitterdodge(jitter.width = 0, dodge.width = 1)) +
+    geom_vline(xintercept = 10, color = "gray", linetype = "dashed") +
+    theme_bw() +
+    scale_x_log10() +
+    facet_wrap(~.data[[grp_fct]], ncol = 4) +
+    theme(strip.background = element_rect(fill="white")) +
+    xlab("n cells") +
+    ylab(clust_labs)
+```
+
+### Stacked bar plots; arranged by ``r sampleID`` and ``r grp_fct``
+
+```{r stacked_bar, fig.width=12, fig.height=6}
+s.full@meta.data %>%
+  group_by(.data[[clust_labs]], .data[[sampleID]], .data[[grp_fct]]) %>%
+    count() %>%
+  ungroup() %>%
+  pivot_wider(names_from = all_of(clust_labs), values_from = n, values_fill = 0) %>%
+  mutate(nCells_total = rowSums(select(., -all_of(sampleID), -all_of(grp_fct)))) %>%
+  pivot_longer(cols = -c(all_of(sampleID), all_of(grp_fct), nCells_total), values_to = "n", names_to = clust_labs) %>%
+  mutate(p = n/nCells_total) %>%
+  ggplot(aes(x = .data[[sampleID]], y = p, fill = .data[[clust_labs]])) +
+    geom_bar(stat = "identity", color = "black") +
+  theme_classic() +
+  facet_grid(rows = ~.data[[grp_fct]], scales = "free_x", space = "free") +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
+  ylab("Proportion of cells")
+```
+
+## Samples and clusters dropped
+
+`r length(samples2drop)` samples were dropped `r if (length(samples2drop) > 0) paste0("(", paste0(samples2drop, collapse = ", "), ")")`, and `r length(clusters2drop)` clusters were dropped `r if (length(clusters2drop) > 0) paste0("(", paste0(clusters2drop, collapse = ", "), ")")`.
+
+# 3 - Gene filtering by expression
+
+Genes with low or zero expression across most samples are not informative and removing them improves False Discovery Rate control and differential expression model fit. Here are the results of filtering genes based on expression. Genes retained for downstream analysis are in green (non-zero expression) or yellow (zero expression), and genes filtered from analysis are in orange (non-zero expression) and red (zero expression). 
+
+```{r plotFilterByExpr, fig.width=12, fig.height=8, message=F}
+plotFilterByExpr(pb_prefilt, keep_tbl, pseudobulk = T) + 
+  facet_wrap(~cluster, ncol=4)
+```
+
+<!-- Note: Use this code if you'd like to tabset separate plots for each cluster: -->
+
+<!-- ```{r plotFilterByExpr, results='asis'} -->
+<!-- chunk_plotFilterByExpr <- c( -->
+<!--   '## {{ cluster_i }}\n', -->
+<!--   '```{r, fig.width=10, fig.height=10}', -->
+<!--   'plotFilterByExpr(pb_prefilt[["{{cluster_i}}"]]$dge, keep.exprs)', -->
+<!--   '```\n' -->
+<!--   ) -->
+
+<!-- out <- NULL -->
+<!-- for (cluster_i in names(pb)) { -->
+<!--   out <- c(out, knitr::knit_expand(text = chunk_plotFilterByExpr)) -->
+<!-- } -->
+<!-- cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n') -->
+<!-- ``` -->
+
+# 4 - Library sizes
+
+Below are the library sizes (total UMI counts) for each pseudobulk aggregate. Note that it is common for there to be some variation, and our statistical methods were designed to handle this.
+
+```{r plotLibSizes, fig.width=12, fig.height=8, message=FALSE}
+lapply(pb_prefilt, function(x) {
+  x$dge$counts %>%
+    as_tibble(rownames = "gene")
+}) %>% bind_rows(.id = "cluster") %>%
+  left_join(keep_tbl) %>%
+  pivot_longer(cols = -c(gene, keep, cluster), names_to = "sampleID", values_to = "counts") %>%
+  group_by(sampleID, keep, cluster) %>%
+    summarize(lib.size = sum(counts)) %>%
+  ungroup() %>%
+  ggplot(aes(y = fct_rev(sampleID), x = lib.size, fill = keep)) +
+  geom_bar(stat="identity") +
+  xlab("Library size (sum of counts)") + ylab("Sample ID") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~cluster, ncol = 4)
+```
+
+# 5 - PCA {.tabset}
+
+Exploring projections of expression profiles onto low dimensional space using a limited number of highly variable genes. This will give us an estimate of similarity between samples, but will not account for all genes.
+
+<!-- Note: the guides(path = "none") is a temporary workaround before I fix the no-default `path` issue in gencoreBulk -->
+
+```{r ggplotMDS, results='asis'}
+chunk_ggplotMDS <- c(
+  '## {{ cluster_i }}\n',
+  '```{r, fig.width=8, fig.height=6, message=F, warning=F}',
+  'ggplotMDS(pb[["{{cluster_i}}"]]$dge, gene.selection = "common",
+             sampleID = "sample", color = "{{grp_fct}}", path = "sample") +
+  guides(linetype = "none")',
+  '```\n'
+  )
+
+out <- NULL
+for (cluster_i in names(pb)) {
+  out <- c(out, knitr::knit_expand(text = chunk_ggplotMDS))
+}
+cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
+```
+

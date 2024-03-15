@@ -140,16 +140,16 @@ samples2drop_cellIDs <- s.full@meta.data %>%
 s.filt <- s.full %>% 
   subset(cells = samples2drop_cellIDs, invert = TRUE)
 sample_md <- sample_md %>% 
-  filter(.data[[sampleID]] != samples2drop) %>% 
+  filter(!(.data[[sampleID]] %in% samples2drop)) %>% 
   mutate({{ sampleID }} := fct_drop(.data[[sampleID]], samples2drop))
 ```
 
 Drop problematic clusters
 ```{r}
-clusters2drop <- c("removed")
-clusters2drop_cellIDs <- s.full@meta.data %>%
+clusters2drop <- c("removed", "Tdn")
+clusters2drop_cellIDs <- s.filt@meta.data %>%
     filter(.data[[clust_labs]] %in% clusters2drop) %>% rownames()
-s.filt <- s.full %>% subset(cells = clusters2drop_cellIDs, invert = TRUE)
+s.filt <- s.filt %>% subset(cells = clusters2drop_cellIDs, invert = TRUE)
 ```
 
 
@@ -167,19 +167,21 @@ createPBobj <- function(seurat_obj, aggregate_by = NULL, sampleID = "animalID", 
         lapply(., function(x) {
           dge <- x %>%
             edgeR::Seurat2PB(sample = sampleID, cluster = aggregate_by)
-          
+          print(dge$samples$sample)
           # # Seurat2PB appends cluster name to colname, but we don't want that
           # colnames(dge) <- dge$samples$sample
           colnames(dge) <- str_extract(colnames(dge), pattern = "(^[A-Za-z0-9]*)")
           
+          print(dge$samples$sample)
           # Add sample metadata
           dge$samples <- dge$samples %>%
             select(-group) %>%
             left_join(sample_md, by = c("sample" = sampleID))
+          print(dge$samples$sample)
           dge$samples <- dge$samples[match(sample_md[[sampleID]], dge$samples$sample),]
-          
+          print(dge$samples$sample)
           rownames(dge$samples) <- dge$samples$sample
-          
+          print(dge$samples$sample)
           dge$counts <- dge$counts[,match(sample_md[[sampleID]], colnames(dge$counts))]
           
           # Calculate library normalization factors for use downstream when removing heterscedascity with voom
@@ -358,7 +360,7 @@ names(pb) <- names(pb_prefilt)
 
 ## 3.1 - Mean-variance trend by group (i.e. voomByGroup)
 
-<!-- This is not necessary in cases without repeated measures. -->
+<!-- This is not necessary when separating clusters into different bulk experiments (except in cases with repeated measures). -->
 
 ```{r}
 vbg_plot <- pb %>% 
@@ -408,14 +410,14 @@ getDate <- function() {
 
 ## Write `bulk` rds
 ```{r}
-if (!dir.exists(here("rds/", subdir))) {
-  dir.create(here("rds/", subdir))
+if (!dir.exists(here("saved_rds/", subdir))) {
+  dir.create(here("saved_rds/", subdir))
 }
 
 pb_prefilt %>%
-  write_rds(., here("rds/", subdir, paste0("bulk_prefilt-", getDate(), ".rds")))
+  write_rds(., here("saved_rds/", subdir, paste0("pb_prefilt-", getDate(), ".rds")))
 pb %>%
-  write_rds(., here("rds/", subdir, paste0("bulk-", getDate(), ".rds")))
+  write_rds(., here("saved_rds/", subdir, paste0("pb-", getDate(), ".rds")))
 ```
 
 # 5 - Render report
@@ -432,7 +434,7 @@ report_filename_QC <- paste0(project_name, "-",
 
 ## Render
 ```{r}
-rmarkdown::render(input = here("scripts/04-pseudobulk-qc-format.Rmd"),
+rmarkdown::render(input = here("analysis_scripts/04-pseudobulk-qc-format.Rmd"),
                   output_file = report_filename_QC,
                   output_dir = here('reports'))
 ```
