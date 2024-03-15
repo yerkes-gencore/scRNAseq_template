@@ -1,0 +1,440 @@
+---
+title: "04-pseudobulk-qc-runfile"
+author: "ENPRC Genomics Core"
+date:  "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(warning = TRUE,
+                      message = TRUE, 
+                      echo=FALSE, 
+                      fig.width = 8, 
+                      fig.height = 4)
+```
+
+# Libraries
+
+```{r}
+library(tidyverse)
+library(limma)
+library(edgeR)
+library(Seurat)
+library(gencoreBulk)
+library(here)
+
+# source(here("R/limmaEdgeR_functions.R")) # only for heatmap functions, which need to be ported over to gencoreBulk from UM5 project anyway
+```
+
+
+# Outline of workflow
+
+1. Read in data and create `bulk` object
+  - Read in counts from STAR output
+  - Add sample metadata to `bulk` object
+  - Add design to `bulk` object
+2. Filter by expression
+  - Run `FilterByExpr()`
+  - Visualize library sizes and gene counts before and after filtering
+3. PCA
+  - Using ggplot version of output of `plotMDS()`
+
+## Report metadata
+
+These variables help assign filenames to outputs and reports so you can rerun this script with different parameters without mixing up or overwriting files you want to track or compare.
+
+```{r}
+project_name <- "p00000_template"
+report_number <- "04"
+report_author <- "Micah Fletcher"
+```
+
+# 0 - Load data, check cell counts
+
+## 0.1 - Load data
+
+Load Seurat object
+```{r}
+### hacky way to get test data, create a reprex dataset in future
+s.full <- read_rds("/yerkes-cifs/runs/analyst/micah/Analysis/2023_Analyses/p21242_Satish_UM5/p21242_Satish_UM5_Analysis/saved_rds/report-11/s.full.rds")
+Seurat::DefaultAssay(s.full) <- "RNA"
+```
+
+Load/define metadata
+```{r}
+## With composite grouping var as factor in a pre-defined order
+sample_md <- s.full@meta.data %>%
+  dplyr::distinct(animalID, group, challenge) %>%
+  as_tibble() %>%
+  arrange(desc(group), challenge) %>%
+  mutate(grp_chl = paste0(group, "_", challenge) %>% fct() %>% fct_inorder(),
+         animalID = animalID %>% fct() %>% fct_inorder())
+
+## Left join back into Seurat object for plotting consistently
+s.full@meta.data <- s.full@meta.data %>% left_join(sample_md, by = "animalID")
+rownames(s.full@meta.data) <- s.full$cellID
+```
+
+Define project-specific metadata column names
+```{r}
+clust_labs <- "pb_clust_R10"
+sampleID <- "animalID"
+grp_fct <- "grp_chl"
+```
+
+
+## 0.2 - Check cell counts
+
+```{r}
+cell_counts_tbl <- s.full@meta.data %>%
+  group_by(.data[[clust_labs]], .data[[sampleID]], .data[[grp_fct]]) %>%
+    count() %>%
+  ungroup() %>%
+  pivot_wider(names_from = all_of(clust_labs), values_from = n, values_fill = 0) %>%
+  mutate(nCells_total = rowSums(select(., -all_of(sampleID), -all_of(grp_fct)))) %>%
+  pivot_longer(cols = -c(all_of(sampleID), all_of(grp_fct), nCells_total), values_to = "n", names_to = clust_labs) %>%
+  mutate(p = n/nCells_total)
+```
+
+### Scatter plot: split by `group`, colored by `cell type label`, y = `cell type label`
+
+A minimum of 10 cells (dashed gray line) is typically required for aggregation into a pseudobulk sample.
+
+```{r, fig.width=12, fig.height=8, warning = FALSE}
+cell_counts_tbl %>%
+  ggplot(aes(y = fct_rev(.data[[clust_labs]]), color = .data[[clust_labs]], x = n)) +
+    geom_point(size=3,  
+               position = position_jitterdodge(jitter.width = 0, dodge.width = 1)) +
+    geom_vline(xintercept = 10, color = "gray", linetype = "dashed") +
+    theme_bw() +
+    scale_x_log10() +
+    facet_wrap(~.data[[grp_fct]], ncol = 4) +
+    theme(strip.background = element_rect(fill="white")) +
+    xlab("n cells") +
+    ylab(clust_labs)
+```
+
+### Stacked bar plots; arranged by `animalID`, `group`, `challenge`
+```{r, fig.height=6, fig.width=12}
+cell_counts_tbl %>%
+  ggplot(aes(x = .data[[sampleID]], y = p, fill = .data[[clust_labs]])) +
+    geom_bar(stat = "identity", color = "black") +
+  theme_classic() +
+  facet_grid(rows = ~.data[[grp_fct]], scales = "free_x", space = "free") +
+  theme(legend.position = "bottom",
+        axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
+  ylab("Proportion of cells")
+```
+
+## 0.3 - Choose samples and clusters to include in pseudobulk aggregations
+
+<!-- Note: Dropped samples in the template are because of differential loading of sorted cells, which isn't obvious from the above plots -->
+
+Drop problematic samples
+```{r}
+samples2drop <- c("RCw18", "RYr18")
+samples2drop_cellIDs <- s.full@meta.data %>%
+    filter(.data[[sampleID]] %in% samples2drop) %>% rownames()
+s.filt <- s.full %>% 
+  subset(cells = samples2drop_cellIDs, invert = TRUE)
+sample_md <- sample_md %>% 
+  filter(!(.data[[sampleID]] %in% samples2drop)) %>% 
+  mutate({{ sampleID }} := fct_drop(.data[[sampleID]], samples2drop))
+```
+
+Drop problematic clusters
+```{r}
+clusters2drop <- c("removed", "Tdn")
+clusters2drop_cellIDs <- s.filt@meta.data %>%
+    filter(.data[[clust_labs]] %in% clusters2drop) %>% rownames()
+s.filt <- s.filt %>% subset(cells = clusters2drop_cellIDs, invert = TRUE)
+```
+
+
+# 1 - Create list of `bulk` objects
+
+## 1.0 - Custom functions
+
+```{r}
+createPBobj <- function(seurat_obj, aggregate_by = NULL, sampleID = "animalID", sample_md = NULL, design_str = NULL) {
+  ## Convert Seurat obj to PB
+  pb_obj <- list()
+  suppressWarnings({ # warns if only one cluster but we want that
+    pb_obj <- seurat_obj %>% 
+      Seurat::SplitObject(split.by = aggregate_by) %>%
+        lapply(., function(x) {
+          dge <- x %>%
+            edgeR::Seurat2PB(sample = sampleID, cluster = aggregate_by)
+          print(dge$samples$sample)
+          # # Seurat2PB appends cluster name to colname, but we don't want that
+          # colnames(dge) <- dge$samples$sample
+          colnames(dge) <- str_extract(colnames(dge), pattern = "(^[A-Za-z0-9]*)")
+          
+          print(dge$samples$sample)
+          # Add sample metadata
+          dge$samples <- dge$samples %>%
+            select(-group) %>%
+            left_join(sample_md, by = c("sample" = sampleID))
+          print(dge$samples$sample)
+          dge$samples <- dge$samples[match(sample_md[[sampleID]], dge$samples$sample),]
+          print(dge$samples$sample)
+          rownames(dge$samples) <- dge$samples$sample
+          print(dge$samples$sample)
+          dge$counts <- dge$counts[,match(sample_md[[sampleID]], colnames(dge$counts))]
+          
+          # Calculate library normalization factors for use downstream when removing heterscedascity with voom
+          dge$samples$norm.factors <- edgeR::calcNormFactors(dge$counts, method = "TMM")
+          
+          # Create "bulk" object
+          bulk <- list()
+          bulk$dge <- dge
+          # Add design to bulk$md
+          bulk$md$design <- stats::model.matrix(as.formula(design_str), dge$samples)
+          
+          return(bulk)
+        })
+    
+  })
+  
+  ## Arrange clusters in alphabetical order
+  pb_obj <- pb_obj[order(names(pb_obj))]
+  
+  return(pb_obj)
+}
+```
+
+```{r}
+pb <- createPBobj(s.filt, aggregate_by = clust_labs, 
+                  sampleID = sampleID, sample_md = sample_md,
+                  design_str = "~ 0 + grp_chl")
+```
+
+
+# 2 - Filter by expression
+
+"The filtering should be based on the grouping factors or treatment factors that will be involved in the differential expression teststested for, rather than on blocking variables that are not of scientific interest in themselves." 
+
+So if you may need to change the `design = bulk$md$design` to `group = {factor of biological interest}` if you've included nuisance variables in the deisgn. See page 14 of EdgeR manual for details: https://www.bioconductor.org/packages/devel/bioc/vignettes/edgeR/inst/doc/edgeRUsersGuide.pdf
+
+```{r}
+keep.exprs <- pb %>%
+  lapply(., function(bulk) {
+    filterByExpr(bulk$dge, design = bulk$md$design)
+  })
+
+keep_tbl <- lapply(keep.exprs, function(x) {
+  tibble(gene = names(x), keep = x)
+}) %>% bind_rows(.id = "cluster")
+```
+
+## 2.0 - Custom functions
+
+```{r}
+plotFilterByExpr <- function(bulk, keep.exprs, pseudobulk = F) {
+  if (pseudobulk) {
+    keep_tbl <- keep.exprs
+    filtPlot <- lapply(bulk, function(x) {
+      x$dge$counts %>% as_tibble(rownames = "gene")
+    }) %>% 
+    bind_rows(.id = "cluster") %>%
+    left_join(keep_tbl, by = c("gene", "cluster")) %>%
+    pivot_longer(cols = -c(cluster, gene, keep), names_to = "animalID", values_to = "counts") %>%
+    mutate(is_zero = counts == 0) %>%
+    group_by(cluster, animalID, keep) %>%
+    summarize(keep_zero = sum(is_zero & keep),
+              keep_nonzero = sum(!is_zero & keep),
+              remove_zero = sum(is_zero & !keep),
+              remove_nonzero = sum(!is_zero & !keep)) %>%
+    pivot_longer(cols = c(starts_with("keep_"), starts_with("remove_")), names_to = "cat", values_to = "n") %>%
+    mutate(cat = factor(cat, levels = rev(c("keep_nonzero", "keep_zero", "remove_nonzero", "remove_zero")))) %>%
+    ggplot(aes(y = animalID, x = n, fill = cat)) +
+    geom_bar(stat="identity") +
+    scale_fill_manual(values = c("keep_nonzero"="green2", "keep_zero"="yellow2",
+                                 "remove_nonzero"="orange", "remove_zero"="red"),
+                      breaks = c("keep_nonzero", "keep_zero",
+                                 "remove_nonzero", "remove_zero")) +
+    facet_wrap(~cluster) +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  } else if (!pseudobulk) {
+    filtPlot <- bulk$dge$counts %>%
+    dplyr::as_tibble(rownames = "gene") %>%
+    dplyr::left_join(dplyr::tibble(gene = names(keep.exprs), keep = keep.exprs), 
+                     by = c("gene")) %>%
+    tidyr::pivot_longer(cols = -c("gene", "keep"), names_to = "sampleID", values_to = "counts") %>%
+    dplyr::mutate(#sampleID = forcats::fct(.data$sampleID, levels = levels(dge$samples$sampleID)),
+                  is_zero = .data$counts == 0) %>%
+    dplyr::group_by(.data$sampleID) %>%
+    dplyr::summarize(keep_zero = sum(.data$is_zero & .data$keep),
+                     keep_nonzero = sum(!.data$is_zero & .data$keep),
+                     remove_zero = sum(.data$is_zero & !.data$keep),
+                     remove_nonzero = sum(!.data$is_zero & !.data$keep)) %>%
+    dplyr::ungroup() %>%
+    tidyr::pivot_longer(cols = c(starts_with("keep_"), starts_with("remove_")), names_to = "cat", values_to = "n_genes") %>%
+    dplyr::mutate(cat = forcats::fct(.data$cat, levels = rev(c("keep_nonzero", "keep_zero", "remove_nonzero", "remove_zero")))) %>%
+    ggplot(aes(y = forcats::fct_rev(.data$sampleID), x = .data$n_genes, fill = .data$cat)) +
+    geom_bar(stat="identity") +
+    scale_fill_manual(name = "Filtering",
+                      values = c("keep_nonzero"="green2", "keep_zero"="yellow2",
+                                 "remove_nonzero"="orange", "remove_zero"="red"),
+                      breaks = c("keep_nonzero", "keep_zero",
+                                 "remove_nonzero", "remove_zero"),
+                      labels = c("Kept non-zero", "Kept zero",
+                                 "Removed non-zero", "Removed zero")) +
+    xlab("Gene counts") + ylab("Sample ID") +
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+  }
+  return(filtPlot)
+}
+```
+
+
+## 2.1 - Gene filtering by expression
+
+```{r, fig.width = 8, fig.height = 10, message=F}
+plotFilterByExpr(pb, keep_tbl, pseudobulk = T)
+```
+
+
+## 2.2 - Library sizes of discarded and kept data
+```{r, fig.height=10, fig.width=8}
+lapply(pb, function(x) {
+  x$dge$counts %>%
+    as_tibble(rownames = "gene")
+}) %>% bind_rows(.id = "cluster") %>%
+  left_join(keep_tbl) %>%
+  pivot_longer(cols = -c(gene, keep, cluster), names_to = "sampleID", values_to = "counts") %>%
+  group_by(sampleID, keep, cluster) %>%
+    summarize(lib.size = sum(counts)) %>%
+  ungroup() %>%
+  ggplot(aes(y = fct_rev(sampleID), x = lib.size, fill = keep)) +
+  geom_bar(stat="identity") +
+  xlab("Library size (sum of counts)") + ylab("Sample ID") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~cluster)
+
+lapply(pb, function(x) {
+  x$dge$counts %>%
+    as_tibble(rownames = "gene")
+}) %>% bind_rows(.id = "cluster") %>%
+  left_join(keep_tbl) %>%
+  pivot_longer(cols = -c(gene, keep, cluster), names_to = "sampleID", values_to = "counts") %>%
+  group_by(sampleID, keep, cluster) %>%
+    summarize(lib.size = sum(counts)) %>%
+  ungroup() %>%
+  ggplot(aes(y = fct_rev(sampleID), x = lib.size, fill = keep)) +
+  geom_bar(stat="identity") +
+  xlab("Library size (sum of counts)") + ylab("Sample ID") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  facet_wrap(~cluster, scales = "free_x")
+```
+
+## 2.3 - Apply the filter
+```{r}
+## Save the prefiltered data in case you want to compare
+pb_prefilt <- pb
+
+## Apply the filter
+pb <- lapply(names(pb), function(cluster) {
+  pb[[cluster]]$dge <- pb[[cluster]]$dge[keep.exprs[[cluster]], , keep.lib.sizes=FALSE]
+  return(pb[[cluster]])
+})
+names(pb) <- names(pb_prefilt)
+
+## Re-calculate cpm and lcpm, otherwise filtered genes will be included
+pb <- lapply(names(pb), function(cluster) {
+  pb[[cluster]]$dge$cpm <- cpm(pb[[cluster]]$dge)
+  pb[[cluster]]$dge$lcpm <- cpm(pb[[cluster]]$dge, log = TRUE)
+  return(pb[[cluster]])
+})
+names(pb) <- names(pb_prefilt)
+```
+
+
+# 3 - Variance-mean trends and PCA
+
+## 3.1 - Mean-variance trend by group (i.e. voomByGroup)
+
+<!-- This is not necessary when separating clusters into different bulk experiments (except in cases with repeated measures). -->
+
+```{r}
+vbg_plot <- pb %>% 
+  lapply(function(bulk) {
+    getVoomByGroup(bulk, group = "SubjectID") %>%
+    plotVoomByGroup()
+  })
+```
+
+## 3.2 - PCA plot
+
+**To do: add options for elipses, lines, shapes and color scales as in `gencoreBulk::plotPCAFromConfig()`**
+
+```{r, fig.width=8, fig.height=8}
+pb %>% lapply(function(bulk) {
+  ggplotMDS(bulk$dge, group = grp_fct, gene.selection = "common",
+          sampleID = "sample", color = grp_fct, path = "sample")
+})
+```
+
+## 3.3 - MDS plot
+
+Multidimensional scaling plot; distances correspond to BCV between pairs of samples. Pairwise BCVs were computed from the 500 most heterogeneous genes. See ?limma::plotMDS() for details.
+
+[McCarthy et al. 2012](https://academic.oup.com/nar/article/40/10/4288/2411520)
+> Biological coefficient of variation is the coefficient of variation with which the (unknown) true abundance of the gene varies between replicate RNA samples. It represents the CV that would remain between biological replicates if sequencing depth could be increased indefinitely. 
+
+```{r, fig.width=8, fig.height=8}
+pb %>% lapply(function(bulk) {
+  ggplotMDS(bulk$dge, group = grp_fct, gene.selection = "pairwise",
+          sampleID = "sample", color = grp_fct, path = "sample")
+})
+```
+
+# 4 - Write rds
+
+## Create a subdir name and keep it consistent across dirs
+
+```{r}
+## Subdir name for `outputs` and `rds`
+subdir <- paste0("report-", report_number, "-QC")
+## Formatted date for filenames
+getDate <- function() {
+  format(Sys.Date(), "%Y%m%d")
+}
+```
+
+## Write `bulk` rds
+```{r}
+if (!dir.exists(here("saved_rds/", subdir))) {
+  dir.create(here("saved_rds/", subdir))
+}
+
+pb_prefilt %>%
+  write_rds(., here("saved_rds/", subdir, paste0("pb_prefilt-", getDate(), ".rds")))
+pb %>%
+  write_rds(., here("saved_rds/", subdir, paste0("pb-", getDate(), ".rds")))
+```
+
+# 5 - Render report
+
+## Set filenames
+
+```{r}
+report_filename_QC <- paste0(project_name, "-", 
+                             report_number, "-",
+                             "QC-", 
+                             format(Sys.Date(), "%Y%m%d"), ".html")
+```
+
+
+## Render
+```{r}
+rmarkdown::render(input = here("analysis_scripts/04-pbSep-qc-format.Rmd"),
+                  output_file = report_filename_QC,
+                  output_dir = here('reports'))
+```
