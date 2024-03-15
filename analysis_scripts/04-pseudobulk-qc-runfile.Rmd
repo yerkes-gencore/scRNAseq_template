@@ -393,7 +393,7 @@ pb %>% lapply(function(bulk) {
 })
 ```
 
-# 4 - Export count table and write bulk object rds
+# 4 - Write rds
 
 ## Create a subdir name and keep it consistent across dirs
 
@@ -406,27 +406,15 @@ getDate <- function() {
 }
 ```
 
-## Export count table
-
-```{r}
-if (!dir.exists(here("outputs/", subdir))) {
-  dir.create(here("outputs/", subdir))
-}
-
-bulk$dge$counts %>% 
-  as_tibble(rownames = "gene") %>%
-  write_csv(., here("outputs/", subdir, paste0("counts-", getDate(), ".rds")))
-```
-
 ## Write `bulk` rds
 ```{r}
 if (!dir.exists(here("rds/", subdir))) {
   dir.create(here("rds/", subdir))
 }
 
-bulk_prefilt %>%
+pb_prefilt %>%
   write_rds(., here("rds/", subdir, paste0("bulk_prefilt-", getDate(), ".rds")))
-bulk %>%
+pb %>%
   write_rds(., here("rds/", subdir, paste0("bulk-", getDate(), ".rds")))
 ```
 
@@ -444,7 +432,7 @@ report_filename_QC <- paste0(project_name, "-",
 
 ## Render
 ```{r}
-rmarkdown::render(input = here("scripts/01-limmaEdgeR-QC-format.Rmd"),
+rmarkdown::render(input = here("scripts/04-pseudobulk-qc-format.Rmd"),
                   output_file = report_filename_QC,
                   output_dir = here('reports'))
 ```
