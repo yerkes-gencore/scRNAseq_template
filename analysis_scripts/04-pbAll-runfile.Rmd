@@ -28,6 +28,8 @@ library(fgsea)
 library(here)
 library(writexl)
 
+source(here("helper_scripts/heatmap_functions.R"))
+
 # source(here("R/limmaEdgeR_functions.R")) # only for heatmap functions, which need to be ported over to gencoreBulk from UM5 project anyway
 ```
 
@@ -142,7 +144,7 @@ cell_counts_tbl %>%
 
 Drop problematic samples
 ```{r}
-samples2drop <- c("RCw18", "RYr18")
+samples2drop <- c()
 samples2drop_cellIDs <- s.cd8@meta.data %>%
     filter(.data[[subjectID]] %in% samples2drop) %>% rownames()
 s.filt <- s.cd8 %>% 
@@ -487,6 +489,9 @@ bulk <- fitVoomLm(bulk,
                   contr.matrix=contr.matrix, 
                   sample.weights = TRUE, 
                   block = bulk$dge$samples$sample)
+
+## This is also a good time calculate lcpm for downstream plotting
+bulk$dge$lcpm <- cpm(bulk$dge$counts, log = T)
 ```
 
 
@@ -762,22 +767,15 @@ bulk %>%
   write_rds(., here("saved_rds/", subdir, paste0("bulk-", getDate(), ".rds")))
 ```
 
-## Render reports
+## Render report(s)
 
 ### Set filenames
 
 ```{r}
-# report_title_root <- "QC"
-report_filename_QC <- paste0(project_name, "-", 
-                             report_number, "-",
-                             "QC-",
-                             format(Sys.Date(), "%Y%m%d"), ".html")
-
-# report_title_root <- "DE"
-report_filename_DE <- paste0(project_name, "-", 
-                             report_number, "-",
-                             "DE-",
-                             format(Sys.Date(), "%Y%m%d"), ".html")
+report_filename <- paste0(project_name, "-", 
+                          report_number, "-",
+                          "pbALL-",
+                          format(Sys.Date(), "%Y%m%d"), ".html")
 ```
 
 ### Number of genes in heatmaps
@@ -787,9 +785,9 @@ n_genes <- 30
 n_pathways <- 30
 ```
 
-### Render
+### Render report
 ```{r}
-rmarkdown::render(input = here("scripts/02-limmaEdgeR-DE-format.Rmd"),
-                  output_file = report_filename_DE,
+rmarkdown::render(input = here("analysis_scripts/04-pbAll-format.Rmd"),
+                  output_file = report_filename,
                   output_dir = here('reports'))
 ```
