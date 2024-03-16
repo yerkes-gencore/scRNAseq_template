@@ -19,27 +19,18 @@ knitr::opts_chunk$set(warning = TRUE,
 
 ```{r}
 library(tidyverse)
+library(Seurat)
 library(limma)
 library(edgeR)
-library(Seurat)
 library(gencoreBulk)
+library(msigdbr)
+library(fgsea)
 library(here)
+library(writexl)
 
 # source(here("R/limmaEdgeR_functions.R")) # only for heatmap functions, which need to be ported over to gencoreBulk from UM5 project anyway
 ```
 
-
-# Outline of workflow
-
-1. Read in data and create `bulk` object
-  - Read in counts from STAR output
-  - Add sample metadata to `bulk` object
-  - Add design to `bulk` object
-2. Filter by expression
-  - Run `FilterByExpr()`
-  - Visualize library sizes and gene counts before and after filtering
-3. PCA
-  - Using ggplot version of output of `plotMDS()`
 
 ## Report metadata
 
@@ -51,9 +42,24 @@ report_number <- "04"
 report_author <- "Micah Fletcher"
 ```
 
-# 0 - Load data, check cell counts
+# Phase 1 - Quality Control
 
-## 0.1 - Load data
+## Outline of workflow
+
+1. Read in data and create `bulk` object
+  - Read in counts from STAR output
+  - Add sample metadata to `bulk` object
+  - Add design to `bulk` object
+2. Filter by expression
+  - Run `FilterByExpr()`
+  - Visualize library sizes and gene counts before and after filtering
+3. PCA
+  - Using ggplot version of output of `plotMDS()`
+
+
+## 1.0 - Load data, check cell counts
+
+### 1.0.1 - Load data
 
 Load Seurat object
 ```{r}
@@ -74,7 +80,7 @@ sample_md <- s.cd8@meta.data %>%
          animalID = animalID %>% fct() %>% fct_inorder())
 
 ## Left join back into Seurat object for plotting consistently
-s.cd8@meta.data <- s.cd8@meta.data %>% left_join(sample_md, by = "animalID")
+s.cd8@meta.data <- s.cd8@meta.data %>% left_join(sample_md)
 rownames(s.cd8@meta.data) <- s.cd8$cellID
 ```
 
@@ -82,20 +88,21 @@ Define project-specific metadata column names
 ```{r}
 clust_labs <- "s.fullwnn1.0"
 subjectID <- "animalID"
-grp_fct <- "grp_chl"
+qc_grp <- "challenge"
+pb_grp <- "clust_chl"
 ```
 
 
-## 0.2 - Check cell counts
+### 1.0.2 - Check cell counts
 
 ```{r}
 cell_counts_tbl <- s.cd8@meta.data %>%
-  group_by(.data[[clust_labs]], .data[[subjectID]], .data[[grp_fct]]) %>%
+  group_by(.data[[clust_labs]], .data[[subjectID]], .data[[qc_grp]]) %>%
     count() %>%
   ungroup() %>%
   pivot_wider(names_from = all_of(clust_labs), values_from = n, values_fill = 0) %>%
-  mutate(nCells_total = rowSums(select(., -all_of(subjectID), -all_of(grp_fct)))) %>%
-  pivot_longer(cols = -c(all_of(subjectID), all_of(grp_fct), nCells_total), values_to = "n", names_to = clust_labs) %>%
+  mutate(nCells_total = rowSums(select(., -all_of(subjectID), -all_of(qc_grp)))) %>%
+  pivot_longer(cols = -c(all_of(subjectID), all_of(qc_grp), nCells_total), values_to = "n", names_to = clust_labs) %>%
   mutate(p = n/nCells_total)
 ```
 
@@ -111,7 +118,7 @@ cell_counts_tbl %>%
     geom_vline(xintercept = 10, color = "gray", linetype = "dashed") +
     theme_bw() +
     scale_x_log10() +
-    facet_wrap(~.data[[grp_fct]], ncol = 4) +
+    facet_wrap(~.data[[qc_grp]], ncol = 4) +
     theme(strip.background = element_rect(fill="white")) +
     xlab("n cells") +
     ylab(clust_labs)
@@ -123,13 +130,13 @@ cell_counts_tbl %>%
   ggplot(aes(x = .data[[subjectID]], y = p, fill = .data[[clust_labs]])) +
     geom_bar(stat = "identity", color = "black") +
   theme_classic() +
-  facet_grid(rows = ~.data[[grp_fct]], scales = "free_x", space = "free") +
+  facet_grid(rows = ~.data[[qc_grp]], scales = "free_x", space = "free") +
   theme(legend.position = "bottom",
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
   ylab("Proportion of cells")
 ```
 
-## 0.3 - Choose samples and clusters to include in pseudobulk aggregations
+### 1.0.3 - Choose samples and clusters to include in pseudobulk aggregations
 
 <!-- Note: Dropped samples in the template are because of differential loading of sorted cells, which isn't obvious from the above plots -->
 
@@ -154,9 +161,9 @@ s.filt <- s.filt %>% subset(cells = clusters2drop_cellIDs, invert = TRUE)
 ```
 
 
-# 1 - Create list of `bulk` objects
+## 1.1 - Create list of `bulk` objects
 
-## 1.0 - Custom functions
+### 1.1.0 - Custom functions
 
 ```{r}
 createPBobj <- function(seurat_obj, aggregate_by = NULL, subjectID = "animalID", arrange_by = NULL,
@@ -227,17 +234,21 @@ createPBobj <- function(seurat_obj, aggregate_by = NULL, subjectID = "animalID",
 ```{r}
 bulk <- createPBobj(s.filt, aggregate_by = clust_labs, 
                     subjectID = subjectID, sample_md = sample_md, 
-                    arrange_by = "challenge", split_clusters = F,
+                    arrange_by = qc_grp, split_clusters = F,
                     design_str = "~ 0")
 
 bulk$dge$samples <- bulk$dge$samples %>%
-  mutate(clust_chl = paste0(cluster, "_", challenge))
+  mutate({{pb_grp}} := paste0(.data$cluster, "_", .data[[qc_grp]]))
 
-bulk$md$design <- stats::model.matrix(~ clust_chl, dge$samples)
-colnames(bulk$md$design) <- str_replace(colnames(bulk$md$design), "clust_chl", "clust")
+# Note: This only works for a one-factor design (e.g. combining cluster and one other factor into a single factor)
+# Also note: If fitting a random effects model, don't include the random effect in the model formula, otherwise it will be treated as a fixed effect. You will specify the random effect in the voomLmFit later on.
+design_formula <- as.formula(paste0("~ 0 +", pb_grp))
+
+bulk$md$design <- stats::model.matrix(design_formula, bulk$dge$samples)
+colnames(bulk$md$design) <- str_replace(colnames(bulk$md$design), pb_grp, "clust")
 ```
 
-# 2 - Filter by expression
+## 1.2 - Filter by expression
 
 "The filtering should be based on the grouping factors or treatment factors that will be involved in the differential expression teststested for, rather than on blocking variables that are not of scientific interest in themselves." 
 
@@ -247,7 +258,7 @@ So if you may need to change the `design = bulk$md$design` to `group = {factor o
 keep.exprs <- filterByExpr(bulk$dge, design = bulk$md$design)
 ```
 
-## 2.0 - Custom functions
+### 1.2.0 - Custom functions
 
 ```{r}
 counts_kept_tbl <- bulk$dge$counts %>%
@@ -256,11 +267,11 @@ counts_kept_tbl <- bulk$dge$counts %>%
                    by = c("gene")) %>%
   tidyr::pivot_longer(cols = -c("gene", "keep"), names_to = "rownames", values_to = "counts") %>%
   tidyr::separate(.data$rownames, into = c("sample", "cluster"), sep = "_cluster") %>%
-  dplyr::mutate(sample = forcats::fct(.data$sample, levels = levels(dge$samples$sample)),
+  dplyr::mutate(sample = forcats::fct(.data$sample, levels = levels(bulk$dge$samples$sample)),
                 is_zero = .data$counts == 0)
 ```
 
-## 2.1 - Gene filtering by expression
+### 1.2.1 - Gene filtering by expression
 
 ```{r, fig.width = 6, fig.height = 4, message=F}
 counts_kept_tbl %>%
@@ -288,7 +299,7 @@ counts_kept_tbl %>%
 ```
 
 
-## 2.2 - Library sizes of discarded and kept data
+### 1.2.2 - Library sizes of discarded and kept data
 ```{r, fig.width = 6, fig.height = 4, message=F}
 counts_kept_tbl %>%
   dplyr::group_by(.data$sample, .data$cluster, .data$keep) %>%
@@ -302,7 +313,7 @@ counts_kept_tbl %>%
   facet_wrap(~cluster)
 ```
 
-## 2.3 - Apply the filter
+### 1.2.3 - Apply the filter
 ```{r}
 ## Save the prefiltered data in case you want to compare
 bulk_prefilt <- bulk
@@ -312,9 +323,9 @@ bulk$dge <- bulk$dge[keep.exprs, , keep.lib.sizes=FALSE]
 ```
 
 
-# 3 - Variance-mean trends and PCA
+## 1.3 - Variance-mean trends and PCA
 
-## 3.1 - Mean-variance trend by group (i.e. voomByGroup)
+### 1.3.1 - Mean-variance trend by group (i.e. voomByGroup)
 
 <!-- This is not necessary when separating clusters into different bulk experiments (except in cases with repeated measures). -->
 
@@ -325,14 +336,14 @@ voomByGroup(counts = bulk$dge$counts,
             plot = "combine", save.plot = TRUE)
 ```
 
-## 3.2 - PCA plot
+### 1.3.2 - PCA plot
 
 ```{r, fig.width=8, fig.height=8}
 ggplotMDS(bulk$dge, gene.selection = "common",
-          sampleID = "rownames", color = "challenge", path = "cluster")
+          sampleID = "rownames", color = qc_grp, path = "cluster")
 ```
 
-## 3.3 - MDS plot
+### 1.3.3 - MDS plot
 
 Multidimensional scaling plot; distances correspond to BCV between pairs of samples. Pairwise BCVs were computed from the 500 most heterogeneous genes. See ?limma::plotMDS() for details.
 
@@ -341,21 +352,405 @@ Multidimensional scaling plot; distances correspond to BCV between pairs of samp
 
 ```{r, fig.width=8, fig.height=8}
 ggplotMDS(bulk$dge, gene.selection = "pairwise",
-          sampleID = "rownames", color = "challenge", path = "cluster")
+          sampleID = "rownames", color = pb_grp, path = "cluster")
 ```
 
-# 4 - Write rds
+<!-- ## 1.4 - Write rds -->
 
-## Create a subdir name and keep it consistent across dirs
+<!-- ### 1.4.1 - Create a subdir name and keep it consistent across dirs -->
+
+<!-- ```{r} -->
+<!-- ## Subdir name for `outputs` and `rds` -->
+<!-- subdir <- paste0("report-", report_number, "-QC") -->
+<!-- ## Formatted date for filenames -->
+<!-- getDate <- function() { -->
+<!--   format(Sys.Date(), "%Y%m%d") -->
+<!-- } -->
+<!-- ``` -->
+
+<!-- ### 1.4.2 - Write `bulk` rds -->
+<!-- ```{r} -->
+<!-- if (!dir.exists(here("saved_rds/", subdir))) { -->
+<!--   dir.create(here("saved_rds/", subdir)) -->
+<!-- } -->
+
+<!-- pb_prefilt %>% -->
+<!--   write_rds(., here("saved_rds/", subdir, paste0("pb_prefilt-", getDate(), ".rds"))) -->
+<!-- pb %>% -->
+<!--   write_rds(., here("saved_rds/", subdir, paste0("pb-", getDate(), ".rds"))) -->
+<!-- ``` -->
+
+# Phase 2 - Differential Expression
+
+## Outline of workflow
+
+1. Define contrasts
+  - Keep this separate from the `bulk` object for flexibility
+2. DE diagnostics
+  - Run `voomLmFit()` or `glmQLFit()`
+  - Generate results tables
+  - Plot MD
+  - Plot p-value distributions
+3. DE results
+  - Summarize DEG counts in each contrast
+  - Export results list to excel file
+
+## 2.1 - Define contrasts
+
+See https://bioconductor.org/packages/release/workflows/vignettes/RNAseq123/inst/doc/designmatrices.html for a detailed tutorial on how to set up design formulas, model matrices and contrast matrices for all of the commonly encountered RNAseq study designs.
+
+The example below is for the dataset `p21242_Satish_UM5` using only CD8 T cells, contrasting across celltypes and challenges.
+```{r}
+bulk$md$design
+```
+
+
+
+Assuming we'll be using the `limma::duplicateCorrelation()` method of modeling individual as a random effect:
+```{r}
+## Contrasts
+contr.matrix <- makeContrasts(
+  # Average grp effects
+  Average_P11CvsOVA = (clust0_p11c + clust14_p11c + clust5_p11c + clust7_p11c + clust8_p11c + clust9_p11c) / 6 -
+    (clust0_OVA + clust14_OVA + clust5_OVA + clust7_OVA + clust8_OVA + clust9_OVA) / 6,
+  # Within-cluster grp effects
+  clust0_P11CvsOVA = clust0_p11c - clust0_OVA,
+  clust14_P11CvsOVA = clust14_p11c - clust14_OVA,
+  clust5_P11CvsOVA = clust5_p11c - clust5_OVA,
+  clust7_P11CvsOVA = clust7_p11c - clust7_OVA,
+  clust8_P11CvsOVA = clust8_p11c - clust8_OVA,
+  clust9_P11CvsOVA = clust9_p11c - clust9_OVA,
+  # Interaction between cluster and grp
+  clust14vsclust7_P11CvsOVA = (clust14_p11c - clust14_OVA) - (clust7_p11c - clust7_OVA),
+  clust14vsclust0_P11CvsOVA = (clust14_p11c - clust14_OVA) - (clust0_p11c - clust0_OVA),
+  clust14vsclust5_P11CvsOVA = (clust14_p11c - clust14_OVA) - (clust5_p11c - clust5_OVA),
+  clust14vsclust8_P11CvsOVA = (clust14_p11c - clust14_OVA) - (clust8_p11c - clust8_OVA),
+  clust14vsclust9_P11CvsOVA = (clust14_p11c - clust14_OVA) - (clust9_p11c - clust9_OVA),
+  clust7vsclust0_P11CvsOVA = (clust7_p11c - clust7_OVA) - (clust0_p11c - clust0_OVA),
+  clust7vsclust5_P11CvsOVA = (clust7_p11c - clust7_OVA) - (clust5_p11c - clust5_OVA),
+  clust7vsclust8_P11CvsOVA = (clust7_p11c - clust7_OVA) - (clust8_p11c - clust8_OVA),
+  clust7vsclust9_P11CvsOVA = (clust7_p11c - clust7_OVA) - (clust9_p11c - clust9_OVA),
+  clust0vsclust5_P11CvsOVA = (clust0_p11c - clust0_OVA) - (clust5_p11c - clust5_OVA),
+  clust0vsclust8_P11CvsOVA = (clust0_p11c - clust0_OVA) - (clust8_p11c - clust8_OVA),
+  clust0vsclust9_P11CvsOVA = (clust0_p11c - clust0_OVA) - (clust9_p11c - clust9_OVA),
+  clust5vsclust8_P11CvsOVA = (clust5_p11c - clust5_OVA) - (clust8_p11c - clust8_OVA),
+  clust5vsclust9_P11CvsOVA = (clust5_p11c - clust5_OVA) - (clust9_p11c - clust9_OVA),
+  clust8vsclust9_P11CvsOVA = (clust8_p11c - clust5_OVA) - (clust8_p11c - clust9_OVA),
+  levels = bulk$md$design
+  )
+
+# # Pseudobulk "markers" i.e. differences across clusters; not sure how useful, but keeping here in reserve
+# marker.matrix <- makeContrasts(
+#   # OnevsAll markers: grp A
+#   clust14vsclust7_OVA = clust14_OVA - clust7_OVA,
+#   clust14vsclust0_OVA = clust14_OVA - clust0_OVA,
+#   clust14vsclust5_OVA = clust14_OVA - clust5_OVA,
+#   clust14vsclust8_OVA = clust14_OVA - clust8_OVA,
+#   clust14vsclust9_OVA = clust14_OVA - clust9_OVA,
+#   clust7vsclust0_OVA = clust7_OVA - clust0_OVA,
+#   clust7vsclust5_OVA = clust7_OVA - clust5_OVA,
+#   clust7vsclust8_OVA = clust7_OVA - clust8_OVA,
+#   clust7vsclust9_OVA = clust7_OVA - clust9_OVA,
+#   clust0vsclust5_OVA = clust0_OVA - clust5_OVA,
+#   clust0vsclust8_OVA = clust0_OVA - clust8_OVA,
+#   clust0vsclust9_OVA = clust0_OVA - clust9_OVA,
+#   clust5vsclust8_OVA = clust5_OVA - clust8_OVA,
+#   clust5vsclust9_OVA = clust5_OVA - clust9_OVA,
+#   clust8vsclust9_OVA = clust5_OVA - clust9_OVA,
+#   # OnevsAll markers: grp B
+#   clust14vsclust7_P11C = clust14_p11c - clust7_p11c,
+#   clust14vsclust0_P11C = clust14_p11c - clust0_p11c,
+#   clust14vsclust5_P11C = clust14_p11c - clust5_p11c,
+#   clust14vsclust8_P11C = clust14_p11c - clust8_p11c,
+#   clust14vsclust9_P11C = clust14_p11c - clust9_p11c,
+#   clust7vsclust0_P11C = clust7_p11c - clust0_p11c,
+#   clust7vsclust5_P11C = clust7_p11c - clust5_p11c,
+#   clust7vsclust8_P11C = clust7_p11c - clust8_p11c,
+#   clust7vsclust9_P11C = clust7_p11c - clust9_p11c,
+#   clust0vsclust5_P11C = clust0_p11c - clust5_p11c,
+#   clust0vsclust8_P11C = clust0_p11c - clust8_p11c,
+#   clust0vsclust9_P11C = clust0_p11c - clust9_p11c,
+#   clust5vsclust8_P11C = clust5_p11c - clust8_p11c,
+#   clust5vsclust9_P11C = clust5_p11c - clust9_p11c,
+#   clust8vsclust9_P11C = clust5_p11c - clust9_p11c,
+#   levels = bulk$md$design
+#   )
+```
+
+
+## 2.2 - DE diagnostics
+
+### 2.2.1 - Run `voomLmFit()` or `glmQLFit()`
 
 ```{r}
+bulk <- fitVoomLm(bulk, 
+                  contr.matrix=contr.matrix, 
+                  sample.weights = TRUE, 
+                  block = bulk$dge$samples$sample)
+```
+
+
+### 2.2.2 - Generate results tables
+
+```{r}
+resultsTable <- createResTable(bulk$fit.contr, contr.matrix)
+```
+
+There are two easy ways to access tables split by contrast for different purposes using `for()` or `split()`
+```{r}
+# for (contr in unique(resultsTable$contrast)) {
+#   resultsTable %>%
+#     filter(contrast == contr)
+# }
+```
+
+```{r}
+# resultsTable %>%
+#   split(., .$contrast)
+```
+
+
+### 2.2.3 - Plot MD
+
+```{r, fig.width = 8, fig.height = 6}
+md_data <- resultsTable %>%
+    mutate(signif_dir = ifelse(padj >= 0.05, "NotSig",
+                           ifelse(log2FoldChange < 0, "Down", "Up")) %>%
+             factor(., levels = c("NotSig", "Up", "Down")),
+           signif = padj < 0.05)
+  
+ggplot() +
+  geom_point(data = filter(md_data, !signif),
+             aes(x = AveExpr, y = log2FoldChange), 
+             color = "black", size = 0.1) +
+  geom_point(data = filter(md_data, signif), 
+             aes(x = AveExpr, y = log2FoldChange, color = signif_dir), 
+             size = 0.1) +
+  ylim(-max(abs(md_data$log2FoldChange)), max(abs(md_data$log2FoldChange))) +
+  scale_color_manual(values = c("black", "red", "blue"), drop = FALSE) +
+  theme_bw() +
+  facet_wrap(~contrast)
+```
+
+
+### 2.2.4 - Plot p-value distributions
+
+```{r, fig.width = 8, fig.height = 6}
+resultsTable %>%
+      mutate(`pBH < 0.05` = ifelse(padj < 0.05, "TRUE", "FALSE") %>%
+               factor(., levels = c("TRUE", "FALSE"))) %>%
+    ggplot(data = ., aes(x = pvalue, fill = `pBH < 0.05`)) +
+      geom_histogram(breaks = seq(0,1,0.01)) +
+      scale_fill_manual(values = c("red", "black"), drop=FALSE) +
+      theme_bw() +
+    facet_wrap(~contrast, scales = "free_y")
+```
+
+## 2.3 - DE results
+
+### 2.3.1 - Summarize DEG counts in each contrast
+
+```{r}
+n_deg_summary <- resultsTable %>% 
+  group_by(contrast) %>%
+    dplyr::rename(l2fc = log2FoldChange, pBH = padj) %>%
+    summarize(signif_down = sum(pBH < 0.05 & l2fc < 0),
+              nonsignif = sum(pBH >= 0.05),
+              signif_up = sum(pBH < 0.05 & l2fc > 0)) %>%
+  mutate(signif = signif_up + signif_down)
+```
+
+#### Table
+```{r}
+n_deg_summary %>%
+  mutate(signif_signs = paste0(signif_up, " ↑ / ", signif_down, " ↓")) %>%
+  select(contrast, signif_signs) %>%
+  knitr::kable()
+```
+
+#### Bar plots
+```{r, fig.width = 12, fig.height = 8}
+n_deg_summary %>%
+  pivot_longer(cols = c(signif_down, signif_up), 
+               names_to = "sign", 
+               values_to = "n_signif") %>%
+  mutate(n_signif = ifelse(sign == "signif_down",
+                           -n_signif, n_signif)) %>%
+  ggplot(aes(y = fct_rev(contrast), x = n_signif, fill = sign)) +
+  geom_bar(stat="identity") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5)) +
+  theme_bw() +
+  ylab("contrast")
+```
+
+### 2.3.2 - Export results list to excel file
+
+Create a subdir name and keep it consistent across dirs
+```{r}
 ## Subdir name for `outputs` and `rds`
-subdir <- paste0("report-", report_number, "-QC")
+subdir <- paste0("report-", report_number, "-DE")
 ## Formatted date for filenames
 getDate <- function() {
   format(Sys.Date(), "%Y%m%d")
 }
 ```
+
+Create output dir for this report if it doesn't already exist
+```{r}
+if (!dir.exists(here("outputs/", subdir))) {
+  dir.create(here("outputs/", subdir))
+}
+```
+
+#### Export excel file with columns for padj and lfc for each contrast
+```{r}
+resultsTable_for_export <- unique(resultsTable$contrast) %>%
+lapply(., function(contr) {
+  resultsTable %>% 
+    filter(contrast == contr) %>%
+    dplyr::select(gene, l2fc = log2FoldChange, pBH = padj)%>%
+    dplyr::rename_with(~ paste0(contr, "_", .x, recycle0 = TRUE),
+                  all_of(c("l2fc", "pBH")))
+}) %>% 
+  reduce(full_join, by = "gene")
+
+resultsTable_filename <- paste0(
+  project_name, "-", 
+  report_number, "-",
+  "DE_results_tables-", 
+  getDate(), ".xlsx"
+  )
+
+c(list("Summary" = n_deg_summary), 
+  list("ResultsTable" = resultsTable_for_export)) %>%
+writexl::write_xlsx(here("outputs/", subdir, resultsTable_filename))
+```
+
+# Phase 3 - Functional enrichment
+
+## 3.1 - GSEA
+
+## 3.1.1 - Pre-rank DE stats
+
+```{r}
+prepGseaStats2 <- function(marker_table, p_col = "p_val", lfc_col = "avg_log2FC") {
+  ranked_genes <- marker_table %>% filter(!is.na(.data[[p_col]]))
+  ranked_genes$stat <- ranked_genes[[lfc_col]] * -log10(ranked_genes[[p_col]] + .Machine$double.xmin)
+  gsea_stats <- setNames(ranked_genes$stat, nm = rownames(ranked_genes))
+  gsea_stats <- sort(gsea_stats)
+}
+
+gsea_stats <- resultsTable %>%
+  filter(!is.na(pvalue)) %>%
+  mutate(rank_stat = log2FoldChange * -log10(pvalue + .Machine$double.xmin)) %>% 
+  split(.$contrast) %>%
+    lapply(., function(y) {
+      y %>% select(gene, rank_stat) %>%
+        deframe() %>%
+        sort()
+    })
+
+```
+
+### 3.1.2 - Prep gene lists
+
+```{r}
+msigH <- msigdbr(species = "Homo sapiens", category = "H") %>%
+  dplyr::select(gene_symbol, gs_name) %>% unstack()
+
+msigGOBP <- msigdbr(species = "Homo sapiens", category = "C5", subcategory = "GO:BP") %>%
+  dplyr::select(gene_symbol, gs_name) %>% unstack()
+
+msigCP <- c(
+  msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:BIOCARTA") %>%
+    dplyr::select(gene_symbol, gs_name) %>% unstack(),
+  msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:KEGG") %>%
+    dplyr::select(gene_symbol, gs_name) %>% unstack(),
+  msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:PID") %>%
+    dplyr::select(gene_symbol, gs_name) %>% unstack(),
+  msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:REACTOME") %>%
+    dplyr::select(gene_symbol, gs_name) %>% unstack(),
+  msigdbr(species = "Homo sapiens", category = "C2", subcategory = "CP:WIKIPATHWAYS") %>%
+    dplyr::select(gene_symbol, gs_name) %>% unstack()
+)
+```
+
+### 3.1.3 - Run GSEA
+```{r}
+gsea_results <- list()
+
+gsea_results$H <- gsea_stats %>%
+  lapply(., function(stats_vec) {
+    fgsea(pathways = msigH, stats = stats_vec,
+          minSize = 15, maxSize = 100) %>% arrange(pval)
+  })
+
+gsea_results$GOBP <- gsea_stats %>%
+  lapply(., function(stats_vec) {
+    fgsea(pathways = msigGOBP, stats = stats_vec,
+          minSize = 15, maxSize = 100) %>% arrange(pval)
+  })
+
+gsea_results$CP <- gsea_stats %>%
+  lapply(., function(stats_vec) {
+    fgsea(pathways = msigCP, stats = stats_vec,
+          minSize = 15, maxSize = 100) %>% arrange(pval)
+  })
+
+```
+
+### 3.1.4 - Export results table with all contrasts in a wide format as excel file
+```{r}
+gsea_results %>%
+  lapply(., function(x) {
+    bind_rows(x, .id = "contrast")
+    }) %>%
+  bind_rows(.id = "database")
+
+
+## Format results for excel/reports
+gsea_results_fmt <- lapply(names(gsea_results), function(db) {
+    lapply(gsea_results[[db]], function(gsea_results_contrast) {
+      gsea_results_contrast %>%
+        as_tibble() %>%
+        arrange(padj) %>%
+        rowwise() %>%
+        mutate(leading_edge = paste(leadingEdge, collapse = ", ")) %>%
+        ungroup() %>%
+        dplyr::select(pathway, ES, NES, log2err, pval, padj, leading_edge)
+    })
+})
+names(gsea_results_fmt) <- names(gsea_results)
+# Reorder contrast in order of levels to keep consistent order in reports
+gsea_results_fmt <- gsea_results_fmt %>% 
+  lapply(., function(results_db) {
+    results_db <- results_db[levels(resultsTable$contrast)] 
+})
+
+## One sheet per database, each all contrasts side-by-side
+gseaResults_compact <- lapply(names(gsea_results), function(db) {
+    lapply(names(gsea_results[[db]]), function(contrast) {
+      gsea_results_fmt[[db]][[contrast]] %>%
+        dplyr::select(pathway, NES, pBH = padj) %>%
+        dplyr::rename_with(~ paste0(contrast, "_", .x, recycle0 = TRUE), all_of(c("NES", "pBH")))
+          }) %>%
+    purrr::reduce(full_join, by = "pathway")
+})
+names(gseaResults_compact) <- names(gsea_results_fmt)
+
+GSEA_filename <- paste0(
+  project_name, "-", 
+  report_number, "-",
+  "GSEA_results_tables", "-",
+  getDate(), ".xlsx"
+  )
+
+gseaResults_compact %>%
+  writexl::write_xlsx(here("outputs", subdir, GSEA_filename))
+```
+
+# Render report(s) and write rds
 
 ## Write `bulk` rds
 ```{r}
@@ -363,27 +758,38 @@ if (!dir.exists(here("saved_rds/", subdir))) {
   dir.create(here("saved_rds/", subdir))
 }
 
-pb_prefilt %>%
-  write_rds(., here("saved_rds/", subdir, paste0("pb_prefilt-", getDate(), ".rds")))
-pb %>%
-  write_rds(., here("saved_rds/", subdir, paste0("pb-", getDate(), ".rds")))
+bulk %>%
+  write_rds(., here("saved_rds/", subdir, paste0("bulk-", getDate(), ".rds")))
 ```
 
-# 5 - Render report
+## Render reports
 
-## Set filenames
+### Set filenames
 
 ```{r}
+# report_title_root <- "QC"
 report_filename_QC <- paste0(project_name, "-", 
                              report_number, "-",
-                             "QC-", 
+                             "QC-",
+                             format(Sys.Date(), "%Y%m%d"), ".html")
+
+# report_title_root <- "DE"
+report_filename_DE <- paste0(project_name, "-", 
+                             report_number, "-",
+                             "DE-",
                              format(Sys.Date(), "%Y%m%d"), ".html")
 ```
 
+### Number of genes in heatmaps
 
-## Render
 ```{r}
-rmarkdown::render(input = here("analysis_scripts/04-pseudobulk-qc-format.Rmd"),
-                  output_file = report_filename_QC,
+n_genes <- 30
+n_pathways <- 30
+```
+
+### Render
+```{r}
+rmarkdown::render(input = here("scripts/02-limmaEdgeR-DE-format.Rmd"),
+                  output_file = report_filename_DE,
                   output_dir = here('reports'))
 ```

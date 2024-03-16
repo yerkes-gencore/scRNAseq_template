@@ -37,15 +37,15 @@ In this report, ``r report_filename_QC``, we walk through the results of running
 
 Below is an overview of the study design. The first tab is a summary of the sample size per factor levels of interest and the second the full sample table.
 
-## Samples sizes per ``r grp_fct`` level
+## Samples sizes per ``r qc_grp`` level
 
-<!-- Note: Template assumes only one factor (in this case a combination of two factors). For repeated measures design, do `group_by(sample, {{ grp_fct }})`. -->
+<!-- Note: Template assumes only one factor (in this case a combination of two factors). For repeated measures design, do `group_by(sample, {{ qc_grp }})`. -->
 
 ```{r, message=FALSE, warning=FALSE}
-pb[[1]]$dge$samples %>%
-  select("sample", all_of(grp_fct)) %>%
+bulk$dge$samples %>%
+  select("sample", all_of(qc_grp)) %>%
   as_tibble() %>%
-  group_by(.data[[grp_fct]]) %>%
+  group_by(.data[[qc_grp]]) %>%
     summarize(samples = paste0(sample, collapse = ", "),
               n_samples = n()) %>%
   knitr::kable() %>% kableExtra::kable_styling()
@@ -54,8 +54,8 @@ pb[[1]]$dge$samples %>%
 ## Sample table
 
 ```{r, message=FALSE, warning=FALSE}
-pb[[1]]$dge$samples %>%
-  select("sample", all_of(grp_fct)) %>%
+bulk$dge$samples %>%
+  select("sample", all_of(qc_grp)) %>%
   as_tibble() %>%
   knitr::kable() %>% kableExtra::kable_styling()
 ```
@@ -65,7 +65,7 @@ pb[[1]]$dge$samples %>%
 
 ## Cell counts {.tabset}
 
-### Scatter plot: split by ``r grp_fct``, colored by ``r clust_labs``, y = ``r clust_labs``
+### Scatter plot: split by ``r qc_grp``, colored by ``r clust_labs``, y = ``r clust_labs``
 
 A minimum of 10 cells (dashed gray line) is typically required for aggregation into a pseudobulk sample.
 
@@ -77,20 +77,20 @@ cell_counts_tbl %>%
     geom_vline(xintercept = 10, color = "gray", linetype = "dashed") +
     theme_bw() +
     scale_x_log10() +
-    facet_wrap(~.data[[grp_fct]], ncol = 4) +
+    facet_wrap(~.data[[qc_grp]], ncol = 4) +
     theme(strip.background = element_rect(fill="white")) +
     xlab("n cells") +
     ylab(clust_labs)
 ```
 
-### Stacked bar plots; arranged by ``r sampleID`` and ``r grp_fct``
+### Stacked bar plots; arranged by ``r sampleID`` and ``r qc_grp``
 
 ```{r stacked_bar, fig.width=12, fig.height=6}
 cell_counts_tbl %>%
   ggplot(aes(x = .data[[subjectID]], y = p, fill = .data[[clust_labs]])) +
     geom_bar(stat = "identity", color = "black") +
   theme_classic() +
-  facet_grid(rows = ~.data[[grp_fct]], scales = "free_x", space = "free") +
+  facet_grid(rows = ~.data[[qc_grp]], scales = "free_x", space = "free") +
   theme(legend.position = "bottom",
         axis.text.x = element_text(angle=90, vjust=0.5, hjust=1)) +
   ylab("Proportion of cells")
