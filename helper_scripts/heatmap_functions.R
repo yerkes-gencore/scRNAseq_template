@@ -16,6 +16,7 @@
 ## *** Heatmap ***
 
 plotHeatmap <- function(exprs_mat = NULL, gene_tbl = NULL, sample_tbl = NULL,
+                        sampleID = "sample",
                         cluster_genes = FALSE, cluster_samples = FALSE,
                         box_width = unit(3.5, "mm"), width_buffer = unit(5, "mm"),
                         box_height = unit(3.5, "mm"), height_buffer = unit(10, "mm"),
@@ -28,17 +29,17 @@ plotHeatmap <- function(exprs_mat = NULL, gene_tbl = NULL, sample_tbl = NULL,
                         slice_labels_rot = 90) {
   ## Check for missing/misordered sample names
   # If the colnames(exprs_mat) do not match sample_tbl, warn and rearrange columns to match sample_tbl
-  if (!setequal(sample_tbl$sample, colnames(exprs_mat))) {
+  if (!setequal(sample_tbl[[sampleID]], colnames(exprs_mat))) {
     message(paste0("The samples and/or order in `sample_tbl` do not match `colnames(exprs_mat)`. Subsetting `exprs_mat` to match `sample_tbl`."))
-    missing_from_exprs_mat <- sample_tbl$sample[!sample_tbl$sample %in% colnames(exprs_mat)]
+    missing_from_exprs_mat <- sample_tbl[[sampleID]][!sample_tbl[[sampleID]] %in% colnames(exprs_mat)]
     if (length(missing_from_exprs_mat) > 0) {
-      message(paste0("The following genes in `sample_tbl$sample` are missing in `colnames(exprs_mat)`: ", paste0(missing_from_exprs_mat, collapse = ", ")))
+      message(paste0("The following genes in `sample_tbl[[", sampleID, "]]` are missing in `colnames(exprs_mat)`: ", paste0(missing_from_exprs_mat, collapse = ", ")))
     }
-    missing_from_sample_tbl <- colnames(exprs_mat)[!colnames(exprs_mat) %in% sample_tbl$sample]
+    missing_from_sample_tbl <- colnames(exprs_mat)[!colnames(exprs_mat) %in% sample_tbl[[sampleID]]]
     if (length(missing_from_sample_tbl) > 0) {
-      message(paste0("The following genes in `colnames(exprs_mat)` are missing in `sample_tbl$sample`: ", paste0(missing_from_sample_tbl, collapse = ", ")))
+      message(paste0("The following genes in `colnames(exprs_mat)` are missing in `sample_tbl[[", sampleID, "]]`: ", paste0(missing_from_sample_tbl, collapse = ", ")))
     }
-    exprs_mat <- exprs_mat[,sample_tbl$sample]
+    exprs_mat <- exprs_mat[,sample_tbl[[sampleID]]]
   }
 
   ## Check for missing genes
