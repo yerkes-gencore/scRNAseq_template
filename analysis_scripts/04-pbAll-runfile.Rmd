@@ -233,6 +233,8 @@ createPBobj <- function(seurat_obj, aggregate_by = NULL, subjectID = "animalID",
 }
 ```
 
+### 1.1.1 - createPBobj
+
 ```{r}
 bulk <- createPBobj(s.filt, aggregate_by = clust_labs, 
                     subjectID = subjectID, sample_md = sample_md, 
@@ -248,6 +250,23 @@ design_formula <- as.formula(paste0("~ 0 +", pb_grp))
 
 bulk$md$design <- stats::model.matrix(design_formula, bulk$dge$samples)
 colnames(bulk$md$design) <- str_replace(colnames(bulk$md$design), pb_grp, "clust")
+```
+
+### 1.1.1 - setup sample colors for pca and heatmaps
+
+```{r}
+## Setup sample colors and group splits as inputs to plotHeatmap
+sampleID = "rownames"
+sample_tbl <- bulk$dge$samples %>%
+  dplyr::select(all_of(c(sampleID, pb_grp)))
+groupID_colors <- tibble(
+  {{pb_grp}} := factor(unique(sample_tbl[[pb_grp]]), levels = unique(sample_tbl[[pb_grp]])),
+  color = RColorBrewer::brewer.pal(n = length(unique(sample_tbl[[pb_grp]])),
+                                   name = "Paired")
+)
+sample_tbl <- sample_tbl  %>%
+  left_join(groupID_colors, by = {{pb_grp}}) %>%
+  rename(group = all_of(pb_grp))
 ```
 
 ## 1.2 - Filter by expression
@@ -340,9 +359,42 @@ voomByGroup(counts = bulk$dge$counts,
 
 ### 1.3.2 - PCA plot
 
+```{r}
+ggplotMDS <- function(dge, sampleID = "sampleID", 
+                      gene.selection = "common", 
+                      color_by, path, color_tbl, ...) {
+  # Get mds data from edgeR::plotMDS()
+  mds_data <- limma::plotMDS(dge, top = 500, plot = FALSE, 
+                             gene.selection = gene.selection, ...)
+  
+  mds_xy <- mds_data[c("x","y")]
+  mds_xy[[sampleID]] <- colnames(dge)
+  # mds_xy[[sampleID]] <- str_extract(colnames(dge), "(^[A-Za-z0-9]*)")
+  mds_xy <- dplyr::as_tibble(mds_xy) %>% dplyr::full_join(dge$samples, by = sampleID)
+  
+  x_varex <- round(mds_data$var.explained[1]*100, digits = 0)
+  y_varex <- round(mds_data$var.explained[2]*100, digits = 0)
+  
+  mds_xy %>%
+    ggplot(aes(x = .data$x, y = .data$y, 
+               color = .data[[color_by]], 
+               label = .data[[sampleID]])) +
+    geom_text() + 
+    geom_path(aes(linetype = .data[[path]])) +
+    xlab(paste0(mds_data$axislabel, " 1 (", x_varex, "%)")) +
+    ylab(paste0(mds_data$axislabel, " 2 (", y_varex, "%)")) +
+    scale_color_manual(values = distinct(color_tbl, {{color_by}}, color)$color) +
+    theme_classic() +
+    theme(aspect.ratio = 1) +
+    coord_cartesian(clip = "off") +
+    ggtitle(ifelse(gene.selection == "common", "PCA", "MDS"))
+}
+```
+
+
 ```{r, fig.width=8, fig.height=8}
 ggplotMDS(bulk$dge, gene.selection = "common",
-          sampleID = "rownames", color = qc_grp, path = "cluster")
+          sampleID = "rownames", color = pb_grp, color_tbl = sample_tbl, path = "cluster")
 ```
 
 ### 1.3.3 - MDS plot
@@ -353,8 +405,8 @@ Multidimensional scaling plot; distances correspond to BCV between pairs of samp
 > Biological coefficient of variation is the coefficient of variation with which the (unknown) true abundance of the gene varies between replicate RNA samples. It represents the CV that would remain between biological replicates if sequencing depth could be increased indefinitely. 
 
 ```{r, fig.width=8, fig.height=8}
-ggplotMDS(bulk$dge, gene.selection = "pairwise",
-          sampleID = "rownames", color = pb_grp, path = "cluster")
+ggplotMDS(bulk$dge, gene.selection = "common",
+          sampleID = "rownames", color = pb_grp, color_tbl = sample_tbl, path = "cluster")
 ```
 
 <!-- ## 1.4 - Write rds -->

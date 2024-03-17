@@ -1,5 +1,5 @@
 ---
-title: "`r project_name`: Report `r report_number` - QC"
+title: "`r project_name`: Report `r report_number` - Pseudbulk QC, DE & GSEA"
 author: |
   | `r report_author`
   | ENPRC Genomics Core
@@ -31,7 +31,7 @@ details > summary {
 </style>
 ```
 
-In this report, ``r report_filename_QC``, we walk through the quality control, differential expression, and gene set enrichment phases of the requested pseudobulk analysis.
+In this report, ``r report_filename``, we walk through the quality control, differential expression, and gene set enrichment phases of the requested pseudobulk analysis.
 
 # Phase 1 - Study design and quality control
 
@@ -174,8 +174,8 @@ Exploring projections of expression profiles onto low dimensional space using a 
 <!-- Note: the guides(path = "none") is a temporary workaround before I fix the no-default `path` issue in gencoreBulk -->
 
 ```{r pca, fig.width=8, fig.height=8}
-ggplotMDS(bulk$dge, gene.selection = "common",
-          sampleID = "rownames", color = "challenge", path = "cluster")
+ggplotMDS(bulk$dge, gene.selection = "common", sampleID = "rownames", 
+          color = pb_grp, color_tbl = sample_tbl, path = "cluster")
 ```
 
 ***
@@ -279,8 +279,7 @@ The first sheet of ``r resultsTable_filename`` summarizes the number of differen
 
 All genes that passed filtering by expression (`Section 3` of ``r report_filename_QC`` report) are included in the report. Genes that were removed during filtering will have empty entries in the results table.
 
-The sections below summarize the results graphically. Only the significant DEGs are included.
-
+The sections below summarize the results graphically.
 
 ### 2.4.1 - Summary of DEG counts {.tabset}
 
@@ -309,52 +308,7 @@ n_deg_summary %>%
   knitr::kable()
 ```
 
-### 2.4.2 - Tables of significant genes for each contrast {.tabset}
-
-```{r}
-resTable_chunk_text <- c(
-'#### {{contrast_i}} {.tabset}\n',
-'```{r}',
-'resultsTable %>%
-  as_tibble() %>%
-  filter(contrast == "{{contrast_i}}",
-         padj < 0.05) %>%
-  arrange(pvalue) %>%
-  select(gene, l2fc = log2FoldChange, pBH = padj) %>%
-  DT::datatable(extensions = "Buttons",
-                options = list(dom = "Blfrtip",
-                               buttons = c("copy", "csv", "excel", "pdf"),
-                               pageLength = 20))',
-'```\n',
-'\n')
-```
-
-```{r deg_tables, results='asis'}
-out <- NULL
-for (contrast_i in colnames(contr.matrix)) {
-  out <- c(out, knitr::knit_expand(text = resTable_chunk_text))
-}
-
-cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
-```
-
-
-### 2.4.3 - Heatmaps of top `r n_genes` genes for each contrast
-
-```{r}
-## Setup sample colors and group splits as inputs to plotHeatmap
-sampleID = "rownames"
-sample_tbl <- bulk$dge$samples %>%
-  dplyr::select({{ sampleID }}, {{ pb_grp }})
-groupID_colors <- tibble(
-  {{pb_grp}} := factor(unique(sample_tbl[[pb_grp]]), levels = unique(sample_tbl[[pb_grp]])),
-  color = RColorBrewer::brewer.pal(n = length(unique(sample_tbl[[pb_grp]])),
-                                   name = "Paired")
-)
-sample_tbl <- sample_tbl  %>%
-  left_join(groupID_colors, by = all_of(pb_grp)) %>%
-  rename(group = all_of(pb_grp))
-```
+### 2.4.2 - Heatmaps of top `r n_genes` genes for each contrast
 
 #### Top `r n_genes` DEGs by p-value {.tabset}
 
@@ -394,29 +348,6 @@ for (contrast_id in levels(resultsTable$contrast)) {
 cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
 ```
 
-<!-- ```{r} -->
-<!-- ## Test -->
-<!-- for (contrast_id in levels(resultsTable$contrast)) { -->
-<!--   print(contrast_id) -->
-<!--   gene_tbl <- resultsTable %>% -->
-<!--     getTopDegTbl(., contrast_id = contrast_id, sampleID = sampleID, groupID = pb_grp, -->
-<!--                  arrange_by = "pvalue", direction = "equal", padj_cutoff = NULL, -->
-<!--                  slice_n = n_genes, filter_pattern = NULL) %>% -->
-<!--     select(gene, padj, l2fc = log2FoldChange) %>% -->
-<!--     mutate(color = ifelse(is.na(padj), "grey", -->
-<!--                           ifelse(padj >= 0.05, "black", -->
-<!--                                  ifelse(l2fc > 0, "red", -->
-<!--                                         ifelse(l2fc < 0, "blue", -->
-<!--                                                NA))))) -->
-<!--     print( -->
-<!--       plotHeatmap(exprs_mat = bulk$dge$lcpm, gene_tbl = gene_tbl, sample_tbl = sample_tbl, -->
-<!--             sampleID = sampleID, cluster_genes = TRUE, cluster_samples = FALSE) -->
-<!--     ) -->
-<!-- } -->
-
-<!-- ``` -->
-
-
 #### Top `r n_genes` significant DEGs ordered by log fold change {.tabset}
 
 For each cluster-contrast combinations, below are heatmaps the top `r n_genes` significant DEGs (BH-corrected p-value < 0.05), arranged by log fold change.
@@ -454,6 +385,36 @@ for (contrast_id in levels(resultsTable$contrast)) {
 
 cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
 ```
+
+### 2.4.3 - Tables of significant genes for each contrast {.tabset}
+
+```{r}
+resTable_chunk_text <- c(
+'#### {{contrast_i}} {.tabset}\n',
+'```{r}',
+'resultsTable %>%
+  as_tibble() %>%
+  filter(contrast == "{{contrast_i}}",
+         padj < 0.05) %>%
+  arrange(pvalue) %>%
+  select(gene, l2fc = log2FoldChange, pBH = padj) %>%
+  DT::datatable(extensions = "Buttons",
+                options = list(dom = "Blfrtip",
+                               buttons = c("copy", "csv", "excel", "pdf"),
+                               pageLength = 20))',
+'```\n',
+'\n')
+```
+
+```{r deg_tables, results='asis'}
+out <- NULL
+for (contrast_i in colnames(contr.matrix)) {
+  out <- c(out, knitr::knit_expand(text = resTable_chunk_text))
+}
+
+cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
+```
+
 
 # {.unlisted .unnumbered}
 
