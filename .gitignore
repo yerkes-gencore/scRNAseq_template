@@ -3,6 +3,7 @@ reports/*
 plots/*
 saved_rds/*
 reference/*
+outputs/*/*.xlsx
 
 ## general filetypes
 
