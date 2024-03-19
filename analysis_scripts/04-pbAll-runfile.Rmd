@@ -67,8 +67,9 @@ Load Seurat object
 ```{r}
 ### hacky way to get test data, create a reprex dataset in future
 s.cd8 <- read_rds("/yerkes-cifs/runs/analyst/micah/Analysis/2023_Analyses/p21242_Satish_UM5/p21242_Satish_UM5_Analysis/saved_rds/report-13/s.cd8-HVVIV.rds")
-
 Seurat::DefaultAssay(s.cd8) <- "RNA"
+
+s.full <- read_rds("/yerkes-cifs/runs/analyst/micah/Analysis/2023_Analyses/p21242_Satish_UM5/p21242_Satish_UM5_Analysis/saved_rds/report-11/s.full.rds")
 ```
 
 Load/define metadata
@@ -92,6 +93,79 @@ clust_labs <- "s.fullwnn1.0"
 subjectID <- "animalID"
 qc_grp <- "challenge"
 pb_grp <- "clust_chl"
+```
+
+This is optional if you are working with only a subset of clusters for the pseudobulk analysis
+
+```{r, fig.height=9, fig.width=9}
+# Original colors of full dataset
+DimPlot(s.full, reduction = "wnn.umap.harmony", group.by = clust_labs, 
+        label = T, label.box = T) + 
+  theme(aspect.ratio = 1)
+
+# Focused colors of the subset used
+
+cellLabs_grouped <- c(
+  "31" = "NL_31",
+  "28" = "NL_28",
+  "25" = "NL_25",
+  "11" = "NL_11",
+  "32" = "NL_32",
+  "29" = "APC_29",
+  "22" = "APC_22",
+  "17" = "NL_17",
+  "6" = "B_6",
+  "3" = "B_3",
+  "26" = "B_3",
+  "30" = "B_3",
+  "27" = "APC_27",
+  "15" = "APC_15",
+  "34" = "UK_34",
+  "33" = "UK_33",
+  "16" = "TCD4_16",
+  "2" = "TCD4_2",
+  "12" = "TCD4_12",
+  "18" = "APC_18",
+  "14" = "TCD8_14",
+  "7" = "TCD8_7",
+  "24" = "UK_24",
+  "0" = "TCD8_0",
+  "8" = "TCD8_8",
+  "10" = "NK_10",
+  "4" = "NK_4",
+  "5" = "TCD8_5",
+  "13" = "Tgd_13",
+  "21" = "Tdn_21",
+  "9" = "TCD8_9",
+  "19" = "APC_19",
+  "1" = "APC_1",
+  "23" = "NL_23",
+  "20" = "APC_20"
+  )
+
+cellLabs_grouped_recoder <- setNames(object = names(cellLabs_grouped), nm = cellLabs_grouped)
+
+s.full@meta.data <- s.full@meta.data %>%
+  mutate(cellLabs_grouped = fct_recode(wsnn_harmony_res.1, !!!cellLabs_grouped_recoder),
+         cellLabs_grouped = fct(as.character(cellLabs_grouped), levels = sort(unique(as.character(cellLabs_grouped)))))
+
+DimPlot(s.full, reduction = "wnn.umap.harmony", group.by = "cellLabs_grouped", 
+        label = F) + 
+  theme(aspect.ratio = 1)
+
+subset_cluster_colors_tbl <- tibble(
+  cluster_levels = levels(s.full@meta.data$cellLabs_grouped),
+  color = grepl("TCD8", levels(s.full@meta.data$cellLabs_grouped)))
+
+subset_cluster_colors_tbl$color[subset_cluster_colors_tbl$color==TRUE] <- scales::hue_pal()(sum(subset_cluster_colors_tbl$color==TRUE))
+
+subset_cluster_colors_tbl$color[subset_cluster_colors_tbl$color==FALSE] <- grey(seq(0,0.9, length.out = sum(subset_cluster_colors_tbl$color==FALSE)))
+
+DimPlot(s.full, reduction = "wnn.umap.harmony", group.by = "cellLabs_grouped", 
+        label = F) + 
+  theme(aspect.ratio = 1) +
+  ggtitle("Clusters used in Pseudobulk DE") +
+  scale_color_manual(values = subset_cluster_colors_tbl$color)
 ```
 
 

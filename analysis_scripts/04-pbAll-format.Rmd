@@ -1,5 +1,5 @@
 ---
-title: "`r project_name`: Report `r report_number` - Pseudbulk QC, DE & GSEA"
+title: "`r project_name`: Report `r report_number` - Pseudobulk QC, DE & GSEA"
 author: |
   | `r report_author`
   | ENPRC Genomics Core
@@ -64,8 +64,31 @@ bulk$dge$samples %>%
   knitr::kable() %>% kableExtra::kable_styling()
 ```
 
+## 1.2 - Clusters used in this report {.tabset}
 
-## 1.2 - Cell counts per pseudobulk sample
+<!-- This section is option, only needed if using a subset of clusters in the PB analysis. -->
+
+In this report, we focus on the CD8+ T cells.
+
+### All clusters
+```{r fig.width=9, fig.height=6}
+DimPlot(s.full, reduction = "wnn.umap.harmony", group.by = "cellLabs_grouped", 
+        label = F) + 
+  theme(aspect.ratio = 1) +
+  ggtitle("")
+```
+
+### Clusters used in pseudobulk analysis
+```{r fig.width=9, fig.height=6}
+DimPlot(s.full, reduction = "wnn.umap.harmony", group.by = "cellLabs_grouped", 
+        label = F) + 
+  theme(aspect.ratio = 1) +
+  ggtitle("") +
+  scale_color_manual(values = subset_cluster_colors_tbl$color)
+```
+
+
+## 1.3 - Cell counts per pseudobulk sample
 
 ### Cell counts {.tabset}
 
@@ -104,7 +127,7 @@ cell_counts_tbl %>%
 
 `r length(samples2drop)` samples were dropped `r if (length(samples2drop) > 0) paste0("(", paste0(samples2drop, collapse = ", "), ")")`, and `r length(clusters2drop)` clusters were dropped `r if (length(clusters2drop) > 0) paste0("(", paste0(clusters2drop, collapse = ", "), ")")`.
 
-## 1.3 - Gene filtering by expression
+## 1.4 - Gene filtering by expression
 
 Genes with low or zero expression across most samples are not informative and removing them improves False Discovery Rate control and differential expression model fit. Here are the results of filtering genes based on expression. Genes retained for downstream analysis are in green (non-zero expression) or yellow (zero expression), and genes filtered from analysis are in orange (non-zero expression) and red (zero expression). 
 
@@ -150,7 +173,7 @@ counts_kept_tbl %>%
 <!-- cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n') -->
 <!-- ``` -->
 
-## 1.4 - Library sizes
+## 1.5 - Library sizes
 
 Below are the library sizes (total UMI counts) for each pseudobulk aggregate. Note that it is common for there to be some variation, and our statistical methods were designed to handle this.
 
@@ -167,7 +190,7 @@ counts_kept_tbl %>%
   facet_wrap(~cluster)
 ```
 
-## 1.5 - PCA
+## 1.6 - PCA
 
 Exploring projections of expression profiles onto low dimensional space using a limited number of highly variable genes. This will give us an estimate of similarity between samples, but will not account for all genes.
 
@@ -188,7 +211,7 @@ A separate excel file, ``r resultsTable_filename``, is also provided with this r
 
 Another excel file, ``r GSEA_filename``, is provided with the full results of the gene set enrichment analysis.
 
-## 2.2 - Defining contrasts
+## 2.1 - Defining contrasts
 
 In the sections below, we focus on the results for the following differential expression contrasts.
 
@@ -225,7 +248,7 @@ In the sections below, we focus on the results for the following differential ex
 - **clust8vsclust9_P11CvsOVA** = (clust8_p11c - clust5_OVA) - (clust8_p11c - clust9_OVA)
 
 
-## 2.3 - Quality control {.tabset}
+## 2.2 - Quality control {.tabset}
 
 ### Mean-difference ("MD") plot
 
@@ -271,17 +294,17 @@ voomByGroup(counts = bulk$dge$counts,
             plot = "combine", save.plot = TRUE)
 ```
 
-## 2.4 - Differential expression results
+## 2.3 - Differential expression results
 
 Note that we have sent an excel spreadsheet called ``r resultsTable_filename`` separately with the full list of genes and stats for each contrast of interest.
 
 The first sheet of ``r resultsTable_filename`` summarizes the number of differentially expressed genes (Bonferroni-Hochberg adjusted p-value < 0.05) in each contrast.
 
-All genes that passed filtering by expression (`Section 3` of ``r report_filename_QC`` report) are included in the report. Genes that were removed during filtering will have empty entries in the results table.
+All genes that passed filtering by expression (see `Section 1.3`) are included in the report. Genes that were removed during filtering will have empty entries in the results table.
 
 The sections below summarize the results graphically.
 
-### 2.4.1 - Summary of DEG counts {.tabset}
+### 2.3.1 - Summary of DEG counts {.tabset}
 
 #### Bar plots
 
@@ -308,7 +331,7 @@ n_deg_summary %>%
   knitr::kable()
 ```
 
-### 2.4.2 - Heatmaps of top `r n_genes` genes for each contrast
+### 2.3.2 - Heatmaps of top `r n_genes` genes for each contrast
 
 #### Top `r n_genes` DEGs by p-value {.tabset}
 
@@ -386,7 +409,7 @@ for (contrast_id in levels(resultsTable$contrast)) {
 cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
 ```
 
-### 2.4.3 - Tables of significant genes for each contrast {.tabset}
+### 2.3.3 - Tables of significant genes for each contrast {.tabset}
 
 ```{r}
 resTable_chunk_text <- c(
@@ -420,9 +443,11 @@ cat(knitr::knit_child(text = out, quiet = TRUE), sep = '\n')
 
 ***
 
-# Phase 3 - Gene set enrichment analysis {.tabset}
+# Phase 3 - Gene set enrichment analysis
 
-I tried 3 different gene set lists from the msigdb database: Hallmark (H), Gene Ontology Biological Process (GOBP), and canonical pathways (CP). See details at the [msigdb website](https://www.gsea-msigdb.org/gsea/msigdb/human/genesets.jsp).
+Below are the results of running GSEA against three gene set lists from the msigdb database: Hallmark (H), Gene Ontology Biological Process (GOBP), and canonical pathways (CP). See details at the [msigdb website](https://www.gsea-msigdb.org/gsea/msigdb/human/genesets.jsp).
+
+## 3.1 - GSEA Results {.tabset}
 
 For each database I'm showing a "gsea dot plot" with the top 30 genes with uncorrected pval < 0.1:
 
@@ -437,7 +462,7 @@ The stats tables have also been collected in a separate excel file, ``r GSEA_fil
 
 ```{r}
 chunk_text_gsea_summary <- c(
-'#### **Stats table**\n',
+'##### **Stats table**\n',
 '```{r, message=FALSE, warning=FALSE}',
 'gsea_top_signif <- gsea_results[["{{db}}"]][["{{contr}}"]] %>%
     as_tibble() %>%
@@ -462,7 +487,7 @@ chunk_text_gsea_summary <- c(
 '```\n')
 
 chunk_text_gsea_dotplot <- c(
-'#### **GSEA dot plot**\n',
+'##### **GSEA dot plot**\n',
 '```{r, message=FALSE, warning=FALSE, fig.width = 15, fig.height = 8}',
 'gsea_top_signif <- gsea_results[["{{db}}"]][["{{contr}}"]] %>%
   as_tibble() %>%
@@ -495,10 +520,10 @@ gsea_results_grid <- gsea_results %>%
   
 out <- NULL
 for (contr in unique(gsea_results_grid$contrast)) {
-  out <- c(out, paste0('## ', contr, ' {.tabset}\n\n'),
+  out <- c(out, paste0('### ', contr, ' {.tabset}\n\n'),
            paste0('Results for each of the ', length(unique(gsea_results_grid$db)), ' databases are shown in separate, clickable tabs below.\n'))
   for (db in unique(gsea_results_grid$db)) {
-    out <- c(out, paste0('### ', db, '\n\n'))
+    out <- c(out, paste0('#### ', db, '\n\n'))
     out <- c(out, knitr::knit_expand(text = chunk_text_gsea_dotplot))
     out <- c(out, knitr::knit_expand(text = chunk_text_gsea_summary))
   }
