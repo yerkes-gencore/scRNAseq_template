@@ -15,4 +15,3 @@ Before using this repository, please see the following entries in the knowledgeb
 [Template repos](https://github.com/yerkes-gencore/knowledgebase/blob/main/Project_management_and_reproducibility/template_repos.md): Directory structure and scripts generalizable to an analysis. These serve as starting points for new analyses. 
 
 [Gencore packages](https://github.com/yerkes-gencore/knowledgebase/blob/main/Project_management_and_reproducibility/gencore_packages.md): Standardized code for common gencore analyses.
-
