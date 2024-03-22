@@ -22,6 +22,7 @@ library(tidyverse)
 library(Seurat)
 library(limma)
 library(edgeR)
+renv::install("yerkes-gencore/gencoreBulk#26")
 library(gencoreBulk)
 library(msigdbr)
 library(fgsea)
@@ -239,78 +240,10 @@ s.filt <- s.filt %>% subset(cells = clusters2drop_cellIDs, invert = TRUE)
 
 ## 1.1 - Create list of `bulk` objects
 
-### 1.1.0 - Custom functions
+### 1.1.1 - convertSeurat2Pb
 
 ```{r}
-createPBobj <- function(seurat_obj, aggregate_by = NULL, subjectID = "animalID", arrange_by = NULL,
-                        sample_md = NULL, design_str = NULL, split_clusters = F) {
-  ## Convert Seurat obj to PB
-  pb_obj <- list()
-  ## Splitting clusters before pseudobulking
-  if (split_clusters) {
-    suppressWarnings({ # warns if only one cluster but we want that
-    pb_obj <- seurat_obj %>% 
-      Seurat::SplitObject(split.by = aggregate_by) %>%
-        lapply(., function(x) {
-          dge <- x %>%
-            edgeR::Seurat2PB(sample = subjectID, cluster = aggregate_by)
-          # # Seurat2PB appends cluster name to colname, but we don't want that
-          # colnames(dge) <- dge$samples$sample
-          colnames(dge) <- str_remove(colnames(dge), pattern = "_cluster*$")
-          # Add sample metadata
-          dge$samples <- dge$samples %>%
-            rownames_to_column(var = "rownames") %>%
-            select(-group) %>%
-            left_join(sample_md, by = c("sample" = subjectID)) %>%
-            arrange(.data[[arrange_by]]) %>%
-            mutate(sample = fct(sample) %>% fct_inorder())
-          rownames(dge$samples) <- dge$samples$rownames
-          # Arrange counts columns in same order as samples table
-          dge$counts <- dge$counts[,match(rownames(dge$samples), colnames(dge$counts))]
-          # Calculate library normalization factors for use downstream when removing heterscedascity with voom
-          dge$samples$norm.factors <- edgeR::calcNormFactors(dge$counts, method = "TMM")
-          # Create "bulk" object
-          bulk <- list()
-          bulk$dge <- dge
-          # Add design to bulk$md
-          bulk$md$design <- stats::model.matrix(as.formula(design_str), dge$samples)
-          return(bulk)
-        })
-  })
-  ## Arrange clusters in alphabetical order
-  pb_obj <- pb_obj[order(names(pb_obj))]
-  return(pb_obj)
-  }
-  ## Not splitting clusters before pseudobulking
-  else if (!split_clusters) {
-    dge <- seurat_obj %>%
-      edgeR::Seurat2PB(sample = subjectID, cluster = aggregate_by)
-    # Add sample metadata
-    dge$samples <- dge$samples %>%
-      rownames_to_column(var = "rownames") %>%
-      select(-group) %>%
-      left_join(sample_md, by = c("sample" = subjectID)) %>%
-      arrange(cluster, .data[[arrange_by]]) %>%
-      mutate(sample = fct(sample) %>% fct_inorder())
-    rownames(dge$samples) <- dge$samples$rownames
-    # Arrange counts columns in same order as samples table
-    dge$counts <- dge$counts[,match(rownames(dge$samples), colnames(dge$counts))]
-    # Calculate library normalization factors for use downstream when removing heterscedascity with voom
-    dge$samples$norm.factors <- edgeR::calcNormFactors(dge$counts, method = "TMM")
-    # Create "bulk" object
-    bulk <- list()
-    bulk$dge <- dge
-    # Add design to bulk$md
-    bulk$md$design <- stats::model.matrix(as.formula(design_str), dge$samples)
-    return(bulk)
-  }
-}
-```
-
-### 1.1.1 - createPBobj
-
-```{r}
-bulk <- createPBobj(s.filt, aggregate_by = clust_labs, 
+bulk <- convertSeurat2Pb(s.filt, aggregate_by = clust_labs, 
                     subjectID = subjectID, sample_md = sample_md, 
                     arrange_by = qc_grp, split_clusters = F,
                     design_str = "~ 0")

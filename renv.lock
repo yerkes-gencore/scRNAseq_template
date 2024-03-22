@@ -2159,26 +2159,31 @@
     },
     "gencoreBulk": {
       "Package": "gencoreBulk",
-      "Version": "0.1",
+      "Version": "0.2.0",
       "Source": "GitHub",
       "RemoteType": "github",
       "RemoteHost": "api.github.com",
       "RemoteUsername": "yerkes-gencore",
       "RemoteRepo": "gencoreBulk",
       "RemoteRef": "main",
-      "RemoteSha": "087a3c7c3a780bac63c8a66e60da716ecfd8e6ac",
+      "RemoteSha": "5393ca93ecf00fe0de660be2c1ed8506597b661e",
       "Requirements": [
+        "Biobase",
         "ComplexHeatmap",
         "DESeq2",
         "EnhancedVolcano",
         "SummarizedExperiment",
         "circlize",
         "dplyr",
+        "edgeR",
         "fgsea",
         "forcats",
         "ggplot2",
         "ggrepel",
+        "graphics",
         "here",
+        "limma",
+        "magrittr",
         "matrixStats",
         "methods",
         "openxlsx",
@@ -2189,7 +2194,7 @@
         "tibble",
         "tidyr"
       ],
-      "Hash": "94a2f8a294617e6b2a9eab1396f1d4a4"
+      "Hash": "603c4e2499cf6a5924d4facecab965d3"
     },
     "gencoreSC": {
       "Package": "gencoreSC",
@@ -3203,6 +3208,24 @@
         "lattice"
       ],
       "Hash": "3434988413fbabfdb0fcd6067d7e1aa4"
+    },
+    "loupeR": {
+      "Package": "loupeR",
+      "Version": "1.0.2",
+      "Source": "GitHub",
+      "RemoteType": "github",
+      "RemoteHost": "api.github.com",
+      "RemoteRepo": "loupeR",
+      "RemoteUsername": "10XGenomics",
+      "RemoteRef": "HEAD",
+      "RemoteSha": "3c8d054573f820fe0f90860892c10ff1e4b7e4d2",
+      "Requirements": [
+        "R",
+        "Seurat",
+        "hdf5r",
+        "methods"
+      ],
+      "Hash": "704949f27ce895ba36a789c6788c297f"
     },
     "lubridate": {
       "Package": "lubridate",
@@ -5147,6 +5170,13 @@
         "stats"
       ],
       "Hash": "d77c6f74be05c33164e33fbc85540cae"
+    },
+    "writexl": {
+      "Package": "writexl",
+      "Version": "1.4.2",
+      "Source": "Repository",
+      "Repository": "RSPM",
+      "Hash": "43da939eaf6681c88eba977b9012dad9"
     },
     "xfun": {
       "Package": "xfun",
