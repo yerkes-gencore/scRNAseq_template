@@ -15,7 +15,6 @@ library(here)       ## Easier specification of file locations
 library(yaml)       ## parses config yaml
 ```
 
-```{}
 This script performs quality checks on cellranger processed data. It is
 not intended to perform any data manipulation. This should be lightweight,
 but the format file is separated from the runfile for ease of use and 
@@ -29,16 +28,123 @@ the one rendered by the format file into the reports folder (see final chunk).
 
 You may have to adjust some filter/select functions here, as cellranger seems
 to change their output naming conventions frequently. 
-```
 
 # Read config files
 ```{r}
-## Read config files
 config <- yaml.load_file(here("config/scRNA_GEX_config.yml"))
 samplesheet <- read.table(here('config/samplesheet.txt'), header = TRUE)
 ```
 
-# Gather metric files
+The output formats from cellranger multi differ from cellranger count. Choose
+the appropriate code based on your inputs.
+
+# Cellranger Count
+
+## ADT libraries
+
+### Plot
+
+```{r, fig.width=10}
+## plots are saved to environment so they can be rendered in the format file
+qc_plot_ADT <- qc_metrics %>%
+  select(ID, contains('Antibody')) %>%
+  ## Specify metrics of interest below
+  select(ID,
+         Antibody..Median.UMIs.per.Cell..summed.over.all.recognized.antibody.barcodes.,
+         Antibody..Sequencing.Saturation,
+         Antibody..Fraction.Antibody.Reads.Usable) %>%
+  rename_with(~ gsub("Antibody..", "", .x, fixed=TRUE)) %>%
+  rename_with(~ gsub(".", " ", .x, fixed=TRUE)) %>%
+  reshape2::melt(id.vars = 'ID') %>%
+  ggplot(aes(x=ID, y=value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~variable,
+               ## you may prefer fixed Y scales depending on what you want to show
+               scales='free_y',
+               ncol=3,
+               labeller = as_labeller(
+                  ## option to rename some metrics to add clarity
+                 c(`Median UMIs per Cell  summed over all recognized antibody barcodes ` = 'Median UMIs per cell',
+                   `Sequencing Saturation` = 'Antibody sequencing saturation',
+                   `Fraction Antibody Reads Usable` = 'Fraction antibody reads usable'))) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'Antibody Capture') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+qc_plot_ADT
+```
+
+### Table
+
+```{r}
+qc_table_ADT <- qc_metrics %>% 
+ select(ID, contains('Antibody')) %>%
+  ## Specify metrics of interest below
+  select(ID,
+         Antibody..Median.UMIs.per.Cell..summed.over.all.recognized.antibody.barcodes.,
+         Antibody..Sequencing.Saturation,
+         Antibody..Fraction.Antibody.Reads.Usable) %>%
+  rename_with(~ gsub("Antibody..", "", .x, fixed=TRUE)) %>%
+  rename_with(~ gsub(".", " ", .x, fixed=TRUE))
+qc_table_ADT
+# knitr::kable(qc_table_ADT) %>%
+  # kable_styling(full_width = F)
+```
+
+## GEX libraries
+
+### Plot
+
+```{r, fig.width=14, fig.height=6}
+qc_plot_GEX <- qc_metrics %>%
+  select(ID, !contains('Antibody')) %>%
+  rename_with(~ gsub(".", " ", .x, fixed=TRUE)) %>%
+  # filter(Category == 'Cells') %>%
+  select(ID,
+         'Estimated Number of Cells',
+         'Median Genes per Cell',
+         'Median UMI Counts per Cell',
+         'Reads Mapped Confidently to Genome',
+         'Total Genes Detected',
+         'Sequencing Saturation') %>%
+  reshape2::melt(id.vars = 'ID') %>%
+  ggplot(aes(x=ID, y=value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~variable, 
+               scales='free_y',
+               ncol=3
+               #labeller = labeller(Metric.Name = label_wrap_gen(100))
+               ) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'GEX') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+qc_plot_GEX
+```
+
+### Table
+
+```{r}
+qc_table_GEX <- qc_metrics %>% 
+  select(ID, !contains('Antibody')) %>%
+  rename_with(~ gsub(".", " ", .x, fixed=TRUE)) %>%
+  # filter(Category == 'Cells') %>%
+  select(ID,
+         'Estimated Number of Cells',
+         'Median Genes per Cell',
+         'Median UMI Counts per Cell',
+         'Reads Mapped Confidently to Genome',
+         'Total Genes Detected',
+         'Sequencing Saturation')
+qc_table_GEX
+```
+
+## VDJ
+
+I haven't encountered VDJ data from cellranger count yet, so don't have template code for that.
+You could check the multi section for ideas
+
+# Cellranger Multi
+
+## Gather metric files
 
 ```{r}
 ## This may be moved to package eventually if it seems robust enough
@@ -64,15 +170,11 @@ qc_metrics <- qc_metrics%>%
   arrange(ID)
 ```
 
-# Render QC summaries
-
-```{}
 Depending on the libraries in your captures, these may not all apply
-```
 
-# ADT libraries
+## ADT libraries
 
-## Plot
+### Plot
 
 ```{r, fig.width=10}
 ## plots are saved to environment so they can be rendered in the format file
@@ -101,7 +203,7 @@ qc_plot_ADT <- qc_metrics %>%
 qc_plot_ADT
 ```
 
-## Table
+### Table
 
 ```{r}
 qc_table_ADT <- qc_metrics %>% 
@@ -118,9 +220,9 @@ qc_table_ADT
   # kable_styling(full_width = F)
 ```
 
-# GEX libraries
+## GEX libraries
 
-## Plot
+### Plot
 
 ```{r, fig.width=14, fig.height=6}
 qc_plot_GEX <- qc_metrics %>%
@@ -142,7 +244,7 @@ qc_plot_GEX <- qc_metrics %>%
 qc_plot_GEX
 ```
 
-# Table
+### Table
 
 ```{r}
 qc_table_GEX <- qc_metrics %>% 
@@ -157,17 +259,14 @@ qc_table_GEX <- qc_metrics %>%
 qc_table_GEX
 ```
 
-# VDJ B libraries
+## VDJ B libraries
 
-```{}
 VDJ data is not present in the example dataset, so these won't work, but
 you get the idea. Set eval=TRUE if you do have vdj data
-```
 
+### Plot
 
-## Plot
-
-```{r, fig.width=18, fig.height=4}
+```{r, fig.width=18, fig.height=4, eval=FALSE}
 qc_plot_VDJB <- qc_metrics %>%
   filter(Library.Type=='VDJ B') %>%
   # filter(Category == 'Cells') %>%
@@ -194,7 +293,7 @@ qc_plot_VDJB <- qc_metrics %>%
 qc_plot_VDJB
 ```
 
-## Table
+### Table
 
 ```{r, eval=FALSE}
 qc_table_VDJB <- qc_metrics %>% 
