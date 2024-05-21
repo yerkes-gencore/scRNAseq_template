@@ -131,9 +131,6 @@ objs <- mapply(readCounts10x,
 ## Is this even necessary? 
 # saveRDS(objs, here('saved_rds/raw_captures.Rds'))
 
-## This keeps track of dropped cells etc. through processing steps
-qc_receipts <- list()
-qc_receipts$preprocessing <- lapply(objs, dim)
 ```
 
 ```{r}
@@ -147,22 +144,31 @@ objs <- lapply(objs, function(sample){
 })
 ```
 
+```{r}
+## This keeps track of dropped cells etc. through processing steps
+qc_receipts <- list()
+umaps.rna <- list()
+
+qc_receipts$preprocessing <- lapply(objs, dim)
+## can and should modify the dims manually
+umaps.rna$dims <- c(ceiling(sqrt(length(objs))),ceiling(sqrt(length(objs))))
+```
 
 ## Removing low count genes
 
-```{}
 Rather than using the min.cells argument of readCounts10x, I prefer to separate
 this step out. This has the benefit of 1) allowing you to slot in the soupX
 adjusted counts easily and 2) more explicitly seeing the impact of this step.
 You may not need to do this if you are interested in low abundance genes,
 but it can improve memory use and run speed for some things. 
-```
 
 ```{r}
-## only genes appearing in at least `min.cells` cells will be kept
-## Set calculate_only to FALSE to actually remove them
-objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_only = TRUE)
-objs <- lapply(objs, filterLowGenes, min.cells = 50, assay = 'RNA', calculate_only = FALSE)
+## only genes appearing in at least `min_cells` cells in N-1 samples will be kept
+objs <- filterLowGenes(objs, min_cells = 50, assay = 'RNA')
+## If we decide we don't want joint filtering, but on a per-capture basis, you
+## can still use this function on individual objects
+## objs <- lapply(objs, filterLowGenes)
+
 qc_receipts$remove_low_genes <- lapply(objs, dim)
 ```
 
@@ -183,10 +189,14 @@ objs <- lapply(objs, demuxAntibodyData, labels = HTO_labels, assay = 'ADT')
 ```
 
 ```{r}
-objs <- lapply(objs, subset, subset = HTO_classification != 'Negative')
-qc_receipts$remove_negative_gems <- lapply(objs, dim)
+hto_demux_results <- lapply(objs, function(x) table(x$HTO_classification))
 ```
 
+```{r}
+## Preserving doublets for now, just removing empty gems
+objs <- lapply(objs, subset, subset = HTO_classification.global != 'Negative')
+qc_receipts$remove_negative_gems <- lapply(objs, dim)
+```
 
 ## Doublet detection scDblFinder
 
@@ -203,6 +213,50 @@ objs <- lapply(objs, NormFindVarFeatScaleData)
 
 ```{r}
 objs <- lapply(objs, run_scDblFinder)
+```
+
+### Quick clustering check
+
+```{r}
+objs.tmp <- lapply(objs, function(x) {
+  NormFindVarFeatScaleData(x) %>%
+    RunPCA() %>%
+    FindNeighbors(dims = 1:20) %>%
+    RunUMAP(obj, dims = 1:20)
+})
+umap.plots[['Doublets']] <- objs.tmp %>%
+  lapply(., function(x) {
+    x@meta.data <- x@meta.data %>% mutate(doublets = scDblFinder.class)
+    x
+    }) %>%
+  plotUMAP_split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
+umap.plots[['Doublets']] <- ggarrange(plotlist = umaps.rna[["doublets"]], ncol=3, nrow=2, 
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+```
+
+### Remove doublets
+
+```{r}
+## For scDblFinder doublets
+objs <- lapply(objs, function(x){
+  subset(x, scDblFinder.class != 'doublet')
+})
+## For HTO doublets
+objs <- lapply(objs, function(x){
+  subset(x, HTO_classification.global != 'Doublet')
+})
+qc_receipts$doublet_removal <- lapply(objs, dim)
+```
+
+```{r}
+doublet_counts <- data.frame(
+  doublets = unlist(lapply(qc_receipts$remove_negative_gems, function(x) x[[2]])) -
+    unlist(lapply(qc_receipts$doublet_removal, function(x) x[[2]])),
+  total = unlist(lapply(qc_receipts$remove_negative_gems, function(x) x[[2]]))
+) %>% 
+  mutate(percent = round(100 * doublets / total, 2))
+doublet_counts
 ```
 
 ## Removing low quality cells
@@ -269,7 +323,7 @@ qc_receipts$qc_filtering <- lapply(objs, dim)
 Score cell cycle phase
 ```{r, include=FALSE}
 ## ScoreCC also performs the normalization and scaling
-objs <- lapply(objs, scoreCC, s.genes = cc_genes$s.genes, g2m.genes = cc_genes$g2m.genes)
+objs <- lapply(objs, scoreCC, s.genes = cc.genes$s.genes, g2m.genes = cc.genes$g2m.genes)
 ```
 
 Plot Phase on PCA
@@ -284,62 +338,7 @@ We don't do any default correction for cell-cycle as it is a per-study considera
 But the relevant metadata is stored with the object if you want to regress it out
 downstream.
 
-
-## Clustering
-
-```{r}
-## you could specify dimensions per capture, or you could just proceed
-## with a single dim number for all captures.
-## Still working out if it's necessary to be this selective
-lapply(objs, ElbowPlot, ndims = 30)
-## If nothing egregious with a capture, just use all dims? 
-ndims <- 1:30
-```
-
-
-```{r}
-## In MAPPLY format in case you wanted to provide different values for different 
-## captures, but providing one argument to MoreArgs makes it the same for all 
-## captures
-objs <- mapply(FindNeighbors,
-               objs,
-               reduction = 'pca',
-               MoreArgs = list(dims = ndims))
-objs <- mapply(RunUMAP,
-               objs,
-               assay = 'RNA',
-               reduction.name = 'GEX_UMAP',
-               MoreArgs = list(dims = ndims))
-objs <- lapply(objs, FindClusters)
-```
-
-## Remove doublets
-
-
-```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-umaps.rna <- list()
-umaps.rna[["doublets"]] <- objs %>%
-  lapply(., function(x) {
-    x@meta.data <- x@meta.data %>% mutate(doublets = DF_classifications)
-    x
-    }) %>%
-  plotUMAP_split(., group.by = "doublets", label.size=0, legend = T, reduction = 'GEX_UMAP')
-
-umaps_before_doublet_removal <- ggarrange(plotlist = umaps.rna[["doublets"]], ncol=6, nrow=6, 
-          common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
-```
-
-Moved this to the end to make it more intentional, and you can see how doublets
-are clustering in your data prior to removing
-
-```{r}
-## This will remove doublets
-objs_filt <- lapply(objs_filt, removeDFDoublets)
-qc_receipts$doublet_removal <- lapply(objs_filt, dim)
-```
-
-## Regress cell cycle
+### Regress cell cycle
 
 if you so choose
 
@@ -364,22 +363,20 @@ regress_cc <- function(obj, ndim = 30){
 ```
 
 ```{r}
-objs_filt <- lapply(objs_filt, regress_cc)
+objs.tmp <- lapply(objs, regress_cc)
 ```
 
 ```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
-umaps.rna[["Phase_post_regression"]] <- objs %>%
+umaps.rna[["Phase_post_regression"]] <- objs.tmp %>%
   plotUMAP_split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
 umaps.rna[["Phase_post_regression"]] <- ggarrange(plotlist = umaps.rna[["Phase_post_regression"]],
-                                               ncol=6, nrow=6, 
+                                               ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2], 
                                                common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
 ```
 
-## Re-clustering if needed
-
-If you removed doublets or regressed cell cycle, you should rerun these
+## Clustering
 
 ```{r}
 ## you could specify dimensions per capture, or you could just proceed
@@ -450,73 +447,80 @@ capture-level clusters to identify possible problematic groupings of cells
 
 
 ```{r}
-umaps.rna <- list()
-umaps.rna[["clusters"]] <- plotUMAP_split(objs,
-                                          group.by = "seurat_clusters",
-                                          label.size = 0,
-                                          reduction = 'GEX_UMAP')
+umaps.rna[["clusters"]] <- objs %>%
+  plotUMAP_split(.,
+                 group.by = "seurat_clusters",
+                 label.size = 0,
+                 reduction = 'GEX_UMAP')
+umaps.rna[["clusters"]] <- ggarrange(plotlist = umaps.rna[["clusters"]],
+                                     ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
+          common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Clusters", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
 umaps.rna[["Phase"]] <- objs %>%
   plotUMAP_split(., group.by = "Phase", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["Phase"]] <- ggarrange(plotlist = umaps.rna[["Phase"]], ncol=5, nrow=3, 
+umaps.rna[["Phase"]] <- ggarrange(plotlist = umaps.rna[["Phase"]],
+                                  ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("Phase", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
-umaps.rna[["nGene_RNA"]] <- objs %>%
-  plotUMAP_split(., feature = "nGene_RNA", label.size=0, legend = T, reduction = 'umap')
+umaps.rna[["nGene"]] <- objs %>%
+  plotUMAP_split(., feature = "nGene", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["nGene_RNA"]] <- ggarrange(plotlist = umaps.rna[["nGene_RNA"]], ncol=5, nrow=3, 
+umaps.rna[["nGene"]] <- ggarrange(plotlist = umaps.rna[["nGene"]],
+                                      ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("nGene_RNA", face = "bold", size = 14))
+  annotate_figure(top = ggpubr::text_grob("nGene", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
-umaps.rna[["nCount_RNA"]] <- objs %>%
-  plotUMAP_split(., feature = "nCount_RNA", label.size=0, legend = T, reduction = 'umap')
+umaps.rna[["nUMI"]] <- objs %>%
+  plotUMAP_split(., feature = "nUMI", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["nCount_RNA"]] <- ggarrange(plotlist = umaps.rna[["nCount_RNA"]], ncol=5, nrow=3, 
+umaps.rna[["nUMI"]] <- ggarrange(plotlist = umaps.rna[["nUMI"]],
+                                       ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
-  annotate_figure(top = ggpubr::text_grob("nCount_RNA", face = "bold", size = 14))
+  annotate_figure(top = ggpubr::text_grob("nUMI", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
 umaps.rna[["log10GenesPerUMI"]] <- objs %>%
-  plotUMAP_split(., feature = "log10GenesPerUMI", label.size=0, legend = T, reduction = 'umap')
+  plotUMAP_split(., feature = "log10GenesPerUMI", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["log10GenesPerUMI"]] <- ggarrange(plotlist = umaps.rna[["log10GenesPerUMI"]], ncol=5, nrow=3, 
+umaps.rna[["log10GenesPerUMI"]] <- ggarrange(plotlist = umaps.rna[["log10GenesPerUMI"]],
+                                             ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("log10GenesPerUMI", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
 umaps.rna[["riboRatio"]] <- objs %>%
-  plotUMAP_split(., feature = "riboRatio", label.size=0, legend = T, reduction = 'umap')
+  plotUMAP_split(., feature = "riboRatio", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["riboRatio"]] <- ggarrange(plotlist = umaps.rna[["riboRatio"]], ncol=5, nrow=3, 
+umaps.rna[["riboRatio"]] <- ggarrange(plotlist = umaps.rna[["riboRatio"]],
+                                      ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("riboRatio", face = "bold", size = 14))
 ```
 
 ```{r, fig.width=12, fig.height=8}
 umaps.rna[["mitoRatio"]] <- objs %>%
-  plotUMAP_split(., feature = "mitoRatio", label.size=0, legend = T, reduction = 'umap')
+  plotUMAP_split(., feature = "mitoRatio", label.size=0, legend = T, reduction = 'GEX_UMAP')
 
-umaps.rna[["mitoRatio"]] <- ggarrange(plotlist = umaps.rna[["mitoRatio"]], ncol=5, nrow=3, 
+umaps.rna[["mitoRatio"]] <- ggarrange(plotlist = umaps.rna[["mitoRatio"]],
+                                      ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],
           common.legend = T, legend = "right") %>%
   annotate_figure(top = ggpubr::text_grob("mitoRatio", face = "bold", size = 14))
 ```
 
 # ADT Processing
 
-```{}
 This whole section has not super robustly tested
-```
-
 
 ```{r}
 objs <- lapply(objs,
@@ -551,7 +555,7 @@ adt_umaps <- plotUMAP_split(objs,
                              plot_smaller = T,
                              reduction = 'ADT_UMAP')
 
-ggarrange(plotlist = adt_umaps, ncol = 4, nrow = 6) 
+ggarrange(plotlist = adt_umaps, ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],) 
 
 ```
 
@@ -594,7 +598,7 @@ adt_heatmaps <- lapply(
 
 ```{r, fig.width=12, fig.height=20}
 #adt_heatmaps
-ggarrange(plotlist=adt_heatmaps, ncol=4, nrow=6) %>%
+ggarrange(plotlist=adt_heatmaps, ncol=umaps.rna$dims[1], nrow=umaps.rna$dims[2],) %>%
   annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
 ```
 
