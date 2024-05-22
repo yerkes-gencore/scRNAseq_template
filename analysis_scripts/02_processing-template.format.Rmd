@@ -215,13 +215,13 @@ umaps.rna[["Phase"]]
 ### nUMI
 
 ```{r, fig.width=12, fig.height=8}
-umaps.rna[["nCount"]]
+umaps.rna[["nUMI"]]
 ```
 
 ### nFeature
 
 ```{r, fig.width=12, fig.height=8}
-umaps.rna[["nFeature"]]
+umaps.rna[["nGene"]]
 ```
 
 ### Complexity

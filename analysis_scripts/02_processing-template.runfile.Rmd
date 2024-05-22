@@ -686,7 +686,7 @@ gc()
 ## This only works if all the variables called in the format file 
 ## are in the current environment. Check the format file to tweak
 ## aesthetics 
-rmarkdown::render(here('analysis_scripts/02_processing_template.format.Rmd'),
+rmarkdown::render(here('analysis_scripts/02_processing-template.format.Rmd'),
                   output_file = '02_QC.html',
                   output_dir = here('reports'))
 ```
