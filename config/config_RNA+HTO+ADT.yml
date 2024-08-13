@@ -1,5 +1,5 @@
 # root dir is base of mounted file system, might change by machine
 # The default should be appropriate for mounted systems
-rootDir: '/yerkes-cifs/runs/Analysis/'
+rootDir: '/yerkes-cifs/runs/'
 # cellranger counts output parent folder
-alignmentDir: '../../tools/templates/example_data/sc_ADT+GEX+HTO'
+alignmentDir: 'analyst/micah/Analysis/2023_Analyses/p21242_Satish_UM5/p21242_Satish_UM5_Data'

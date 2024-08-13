@@ -25,9 +25,7 @@ Also note that not all projects will include each of the following sections. If 
 
 # Read config files
 ```{r}
-#config <- yaml.load_file(here("config/scRNA_GEX_config.yml")) # So few items in here that I'm hard coding them here instead
-config <- list(rootDir = '/yerkes-cifs/runs/',
-               alignmentDir = 'analyst/micah/Analysis/2023_Analyses/p21242_Satish_UM5/p21242_Satish_UM5_Data')
+config <- yaml.load_file(here("config/config_RNA.yml"))
 samplesheet <- read.table(here('config/samplesheet_RNA.txt'), header = TRUE)
 ```
 
