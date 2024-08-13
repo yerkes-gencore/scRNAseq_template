@@ -47,13 +47,22 @@ getDate <- function() {
 ```{r}
 ## This may be moved to package eventually if it seems robust enough
 capture_cellranger_multi_qc_metrics <- function(samplesheet, config){
-  files <- lapply(samplesheet$FileID,
-                  function(x) {read.csv(Sys.glob(file.path(
-                    config$rootDir, config$alignmentDir,
-                    x,"outs/metrics_summary.csv")))})
+  files <- tryCatch({
+    lapply(samplesheet$FileID,
+           function(x) {
+             read.csv(Sys.glob(file.path(config$rootDir, config$alignmentDir, x, "outs/metrics_summary.csv")))
+             })
+    }, error = function(e) e)
+  if (inherits(files, "error")) {
+    files <- lapply(samplesheet$FileID,
+           function(x) {
+             read.csv(Sys.glob(file.path(config$rootDir, config$alignmentDir,x,"outs/per_sample_outs/",x,"metrics_summary.csv")))
+             })
+  }
+
   qc <- data.table::rbindlist(files, use.names=TRUE, fill=TRUE,idcol="ID")
   qc$ID <- plyr::mapvalues(qc$ID, from=1:length(samplesheet$Label), to=samplesheet$Label)
-  qc
+  return(qc)
 }
 
 ## Use the FileIDs from the samplesheet to find metric files in the
