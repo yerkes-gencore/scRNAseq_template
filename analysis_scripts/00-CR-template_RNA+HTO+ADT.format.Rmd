@@ -96,7 +96,6 @@ qc_metrics_adt %>%
   kableExtra::kable_styling(full_width = F)
 ```
 
-
 <!-- *** -->
 
 <!-- # VDJ B libraries -->
