@@ -25,14 +25,14 @@ Also note that not all projects will include each of the following sections. If 
 
 # Read config files
 ```{r}
-config <- yaml.load_file(here("config/config_RNA+HTO+ADT.yml"))
-samplesheet <- read.table(here('config/samplesheet_RNA+ADT+HTO.txt'), header = TRUE)
+config <- yaml.load_file(here("config/config-template_ADT.yml"))
+samplesheet <- read.table(here('config/samplesheet-template_ADT.txt'), header = TRUE)
 ```
 
 # Report metadata
 ```{r}
 project_name <- "p24000_template"
-report_number <- "00-RNA+HTO+ADT"
+report_number <- "00-ADT"
 report_author <- "Micah Fletcher"
 report_title_root <- "cellranger_qc"
 
@@ -113,10 +113,11 @@ qc_metrics_gex %>%
 ```{r}
 qc_metrics_adt <- qc_metrics %>%
   select(ID, 
-         Cells = Estimated.Number.of.Cells, 
+         Cells = Estimated.Number.of.Cells,
          `Median genes per cell` = Antibody..Median.UMIs.per.Cell..summed.over.all.recognized.antibody.barcodes.,
          `Fraction antibody reads usable` = Antibody..Fraction.Antibody.Reads.Usable,
          `Mean antibody reads usable per cell` = Antibody..Antibody.Reads.Usable.per.Cell) %>%
+  mutate(across(everything(), as.character)) %>%
   pivot_longer(cols = -ID, names_to = "metric_name", values_to = "metric_value") %>%
   mutate(metric_value = readr::parse_number(metric_value)) %>%
   mutate(ID = factor(ID, levels = unique(gtools::mixedsort(ID)))) %>%
@@ -221,7 +222,7 @@ report_filename <- paste0(project_name, "-", report_number, "-",
 
 ## Render report
 ```{r}
-rmarkdown::render(input = here("analysis_scripts/00-CR-template_RNA+HTO+ADT.format.Rmd"),
+rmarkdown::render(input = here("analysis_scripts/00-CR-template_ADT.format.Rmd"),
                   output_file = report_filename,
                   output_dir = here('reports'))
 ```
