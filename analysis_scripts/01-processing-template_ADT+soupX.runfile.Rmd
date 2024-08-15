@@ -41,6 +41,11 @@ report_rds_dir <- paste0("saved_rds/report-", report_number)
 
 ## Save rds here:
 dir.create(here(report_rds_dir))
+
+## Get formatted date for adding to rds names
+getDate <- function() {
+  format(Sys.Date(), "%Y%m%d")
+}
 ```
 
 
@@ -1092,19 +1097,17 @@ write_csv(adt_per_sample_total_counts, here(paste0("saved_rds/report-", report_n
 write_csv(HTOdoublet_counts, here(paste0("saved_rds/report-", report_number), "HTOdoublet_counts.csv"))
 write_csv(scDbl_counts, here(paste0("saved_rds/report-", report_number), "scDbl_counts.csv"))
 
-write_rds(singler_out, here(paste0("saved_rds/report-", report_number), "singler_out.rds"))
+write_rds(singler_out, here(paste0("saved_rds/report-", report_number), "singler_out-", getDate(), ".rds"))
 
-write_rds(s.split.unfilt, here(paste0("saved_rds/report-", report_number), "s.split.unfilt.rds")) # for filtering plots
-# write_rds(s.split, here(paste0("saved_rds/report-", report_number), "s.split.rds")) # For split UMAPs and CC phase pcas
-write_rds(s.demux, here(paste0("saved_rds/report-", report_number), "s.demux.rds"))
-# write_rds(s.noDb, here(paste0("saved_rds/report-", report_number), "s.noDb.rds"))
-write_rds(s.filtADT.split, here(paste0("saved_rds/report-", report_number), "s.filtADT.split.rds"))
-write_rds(s.filtADT, here(paste0("saved_rds/report-", report_number), "s.filtADT.rds")) # For downstream processing
+write_rds(s.split.unfilt, here(paste0("saved_rds/report-", report_number), "s.split.unfilt-", getDate(), ".rds")) # for filtering plots
+write_rds(s.demux, here(paste0("saved_rds/report-", report_number), "s.demux-", getDate(), ".rds"))
+write_rds(s.filtADT.split, here(paste0("saved_rds/report-", report_number), "s.filtADT.split-", getDate(), ".rds"))
+write_rds(s.filtADT, here(paste0("saved_rds/report-", report_number), "s.filtADT-", getDate(), ".rds")) # For downstream processing
 ```
 
-# 6 - Render report
+# 7 - Render report
 
-## 6.1 - Read and process soupx output from rds
+## 7.1 - Read and process soupx output from rds
 
 Only necessary if you ran soupx in a previous session
 ```{r, eval=FALSE}
@@ -1118,7 +1121,7 @@ extractSoupXContamEst <- function(sc){
 soupx_results <- data.table::rbindlist(lapply(sc, extractSoupXContamEst), idcol = 'Sample')
 ```
 
-## 6.2 - Read the rest of the rdss
+## 7.2 - Read the rest of the rdss
 ```{r, eval=FALSE}
 sample_metadata <- read_csv(here(paste0("saved_rds/report-", report_number), "sample_metadata.csv"))
 
@@ -1136,7 +1139,7 @@ s.demux <- read_rds(here(paste0("saved_rds/report-", report_number), "s.demux.rd
 s.filtADT.split <- read_rds(here(paste0("saved_rds/report-", report_number), "s.filtADT.split.rds")) # For downstream processing
 ```
 
-## 6.3 - Set filename
+## 7.3 - Set filename
 
 ```{r}
 report_filename <- paste0(project_name, "-", 
@@ -1145,7 +1148,7 @@ report_filename <- paste0(project_name, "-",
                           format(Sys.Date(), "%Y%m%d"), ".html")
 ```
 
-## 6.4 - Render
+## 7.4 - Render
 
 ```{r}
 rmarkdown::render(input = "01-processing-template_ADT+soupX.format.Rmd", 
