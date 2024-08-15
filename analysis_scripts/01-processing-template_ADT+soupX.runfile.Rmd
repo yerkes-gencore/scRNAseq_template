@@ -187,6 +187,12 @@ readCounts10x <- function (capID, filepath, min.cells = 0, min.features = 0, str
       errorCondition("Must specify whether input format is 'tsv' or 'h5'")
   }
   
+  # Add capID to front of cell barcode to prevent collisions when merging across clusters
+  counts_in <- lapply(counts_in, function(x) {
+    x@Dimnames[[2]] <- paste0(capID, "_", x@Dimnames[[2]])
+    return(x)
+  })
+  
   # Get gene expression counts; counts_in would be list if multimodal
   if ("Gene Expression" %in% names(counts_in)) {
     gex_counts <- counts_in$`Gene Expression`
@@ -504,8 +510,14 @@ s.split.unfilt <- mapply(readCounts10x,
                          filepath = paths_to_dirs,
                          format = "h5", strip.suffix = FALSE, USE.NAMES = TRUE)
 
+# Add capID to front of cell barcode to prevent collisions when merging across clusters
+sc <- lapply(sc, function(x) {
+    x$adjusted_counts@Dimnames[[2]] <- paste0(capID, "_", x$adjusted_counts@Dimnames[[2]])
+    return(x)
+  })
+
 ## Replace cellranger filtered counts with soupx adjusted counts of filtered cells
-tmp<- lapply(names(s.split.unfilt), function(capID) { #s.split.unfilt 
+s.split.unfilt <- lapply(names(s.split.unfilt), function(capID) { #s.split.unfilt 
   s.split.unfilt[[capID]]@assays$RNA@layers$counts <- 
     sc[[capID]]$adjusted_counts[,colnames(s.split.unfilt[[capID]])]
   return(s.split.unfilt[[capID]])
@@ -517,17 +529,6 @@ write_rds(s.split.unfilt, here(report_rds_dir, "raw_captures.rds"))
 ## This keeps track of dropped cells etc. through processing steps
 qc_receipts_tbl <- init_qc_receipts_tbl(s.split.unfilt)
 qc_receipts_tbl$preprocessing <- qc_receipts_tbl %>% new_qc_receipt(s.split.unfilt)
-```
-
-```{r}
-# ## Renaming cells with the sample name to avoid conflicts with references, merging etc.
-# for (cap in names(s.split.unfilt)){
-#   s.split.unfilt[[cap]]@project.name = paste0(cap)
-# }
-# 
-# s.split.unfilt <- lapply(s.split.unfilt, function(cap_obj){
-#   RenameCells(cap_obj, add.cell.id = cap_obj@project.name)
-# })
 ```
 
 ## 2.2 - Removing low count genes
@@ -1084,6 +1085,16 @@ lapply(
 }) %>%
   ggarrange(plotlist=., ncol = 4, nrow = 2) %>%
   annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
+
+# 6 - Add sample metadata to Seurat obj
+
+```{r}
+# Add sample metadata to seurat object
+s.filtADT$animalID <- s.filtADT$hash.ID
+s.filtADT@meta.data <- s.filtADT@meta.data %>%
+  left_join(sample_metadata, by = "animalID")
+s.filtADT$grp_chl <- paste0(s.filtADT$group, s.filtADT$challenge)
 ```
 
 
