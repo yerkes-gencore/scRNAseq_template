@@ -1148,7 +1148,7 @@ report_filename <- paste0(project_name, "-",
 ## 6.4 - Render
 
 ```{r}
-rmarkdown::render(input = "01-processing-template_ADT+SoupX-format.Rmd", 
+rmarkdown::render(input = "01-processing-template_ADT+soupX.format.Rmd", 
                   output_file = report_filename,
                   output_dir = here("reports/"))
 ```
