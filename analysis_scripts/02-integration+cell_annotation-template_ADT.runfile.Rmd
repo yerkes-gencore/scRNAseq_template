@@ -43,8 +43,6 @@ dir.create(here(report_rds_dir))
 ```{r}
 s.full <- read_rds(here("saved_rds/report-01-ADT/s.filtADT-20240815.rds"))
 sample_metadata <- read_csv(here("saved_rds/report-01-ADT/sample_metadata.csv"))
-
-s.full$animalID <- s.full$hash.ID
 ```
 
 ## 0.3 - Analysis config
@@ -63,7 +61,7 @@ This has already been run at the end of the processing script, but I like to re-
 ```{r}
 ref <- celldex::BlueprintEncodeData()
 
-c(s.filtADT, singler_out) %<-% runSingleR(
+c(s.full, singler_out) %<-% runSingleR(
   obj.seurat = s.full, ref = ref,  labels = ref$label.main,
   meta.prefix = "BP.main", de.method = "classic")
 ```
@@ -135,6 +133,8 @@ DefaultAssay(s.full) <- "RNA"
 
 ### 1.1.1 - Merged
 
+Find variable features agnostic to sample origin.
+
 ```{r}
 s.full <- NormalizeData(s.full, verbose = F)
 s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
@@ -145,6 +145,7 @@ s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.merge.rna", reduction.na
 
 ```{r}
 DimPlot(s.full, reduction = "umap.merge.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.merge.rna", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.merge.rna", group.by = "Phase")
 ```
@@ -154,6 +155,8 @@ DimPlot(s.full, reduction = "umap.merge.rna", group.by = "BP.main.pruned.labels"
 ```
 
 ### 1.1.2 -  Split
+
+Find the shared variable features among all samples.
 
 ```{r}
 s.full[["RNA"]] <- split(s.full[["RNA"]], f = s.full$capID)
@@ -167,6 +170,7 @@ s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.split.rna", reduction.na
 
 ```{r}
 DimPlot(s.full, reduction = "umap.split.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.split.rna", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.split.rna", group.by = "Phase")
 ```
@@ -186,6 +190,7 @@ s.full <- s.full %>% RunUMAP(reduction = "integ.cca.rna", dims = 1:30, reduction
 
 ```{r}
 DimPlot(s.full, reduction = "umap.cca.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.cca.rna", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.cca.rna", group.by = "Phase")
 ```
@@ -205,6 +210,7 @@ s.full <- s.full %>%
 
 ```{r}
 DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "Phase")
 ```
@@ -224,6 +230,7 @@ s.full <- s.full %>%
 
 ```{r}
 DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "Phase")
 ```
@@ -260,12 +267,13 @@ s.full <- NormalizeData(s.full, assay = "ADT", normalization.method = "CLR", mar
 s.full <- NormalizeData(s.full, normalization.method = "CLR", margin = 2, verbose = F)
 s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
 s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
-s.full <- RunPCA(s.full, npcs = 30, reduction.name = "pca.merge.adt", verbose=F)
-s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.merge.adt", reduction.name = "umap.merge.adt", verbose = F)
+s.full <- RunPCA(s.full, npcs = length(prots), reduction.name = "pca.merge.adt", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:length(prots)-1, reduction = "pca.merge.adt", reduction.name = "umap.merge.adt", verbose = F)
 ```
 
 ```{r}
 DimPlot(s.full, reduction = "umap.merge.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.merge.adt", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.merge.adt", group.by = "Phase")
 ```
@@ -282,12 +290,13 @@ s.full[["ADT"]] <- split(s.full[["ADT"]], f = s.full$capID)
 s.full <- NormalizeData(s.full, normalization.method = "CLR", margin = 2, verbose = F)
 s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
 s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
-s.full <- RunPCA(s.full, npcs = 30, reduction.name = "pca.split.adt", verbose=F)
-s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.split.adt", reduction.name = "umap.split.adt", verbose = F)
+s.full <- RunPCA(s.full, npcs = length(prots), reduction.name = "pca.split.adt", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:length(prots)-1, reduction = "pca.split.adt", reduction.name = "umap.split.adt", verbose = F)
 ```
 
 ```{r}
 DimPlot(s.full, reduction = "umap.split.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.split.adt", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.split.adt", group.by = "Phase")
 ```
@@ -302,11 +311,12 @@ DimPlot(s.full, reduction = "umap.split.adt", group.by = "BP.main.pruned.labels"
 s.full <- s.full %>% 
   IntegrateLayers(method = CCAIntegration, verbose = F,
                   orig.reduction = "pca.split.adt", new.reduction = "integ.cca.adt")
-s.full <- s.full %>% RunUMAP(reduction = "integ.cca.adt", dims = 1:30, reduction.name = "umap.cca.adt")
+s.full <- s.full %>% RunUMAP(reduction = "integ.cca.adt", dims = 1:length(prots)-1, reduction.name = "umap.cca.adt")
 ```
 
 ```{r}
 DimPlot(s.full, reduction = "umap.cca.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.cca.adt", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.cca.adt", group.by = "Phase")
 ```
@@ -326,6 +336,7 @@ s.full <- s.full %>%
 
 ```{r}
 DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "Phase")
 ```
@@ -345,6 +356,7 @@ s.full <- s.full %>%
 
 ```{r}
 DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
 DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "BP.main.pruned.labels")
 DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "Phase")
 ```
@@ -352,8 +364,6 @@ DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "Phase")
 ```{r, fig.width = 10, fig.height = 5}
 DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
 ```
-
-
 
 
 ## 1.3 - Weighted-nearest neighbors integration (GEX + ADT)
@@ -364,7 +374,7 @@ This template uses the harmony reductions as inputs to WNN, but you could try ot
 
 ```{r}
 s.full <- FindMultiModalNeighbors(s.full, reduction.list = list("harmony.rna", "harmony.adt"),
-                                  dims.list = list(1:30, 1:16),
+                                  dims.list = list(1:30, 1:length(prots)-1),
                                   knn.graph.name = "wknn.harmony",
                                   snn.graph.name = "wsnn.harmony",
                                   weighted.nn.name = "weighted.nn.harmony",
@@ -384,6 +394,8 @@ DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "BP.main.pruned.label
 ```
 
 # 2 - Clustering
+
+You can hopefully narrow down the best performing integration methods by eyeballing how well samples cluster together in UMAP space, while still retaining the preliminary cell type labels as separate in UMAP space. If so and you are satisfied with your choice, you can just run clustering on the WNN of the results here (e.g. just RPCA) to save time. If not, you can run clustering for several RNA-based and ADT-based methods and compare to pick a final integration methods to input into WNN.
 
 ## 2.1 - RNA
 
@@ -513,7 +525,6 @@ Overview of previous report + per-label heatmaps?
 ```{r, fig.weight=9, fig.height=9}
 DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "wsnn.harmony_res.0.3", label = T) + theme(aspect.ratio = 1)
 ```
-
 
 ```{r, fig.height = 8, fig.width = 7}
 DotPlot(s.full, features = adt_short_name_tbl$original_name, group.by = "wsnn.harmony_res.0.3", cluster.idents = T) +
