@@ -22,6 +22,10 @@ knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
                       fig.width = 8, fig.height = 6,
                       cache=FALSE, cache.lazy = FALSE,
                       fig.align = 'center')#, include=FALSE)
+
+# Set the max size of the future globals 
+# This is needed for memory heavy operations
+# options(future.globals.maxSize = 1000 * 1024^2) # 1000 MB
 ```
 
 <!-- Change this before modifying anything else! This controls where you save rdss and report names. -->
@@ -511,18 +515,38 @@ s.split.unfilt <- mapply(readCounts10x,
                          format = "h5", strip.suffix = FALSE, USE.NAMES = TRUE)
 
 # Add capID to front of cell barcode to prevent collisions when merging across clusters
-sc <- lapply(sc, function(x) {
-    x$adjusted_counts@Dimnames[[2]] <- paste0(capID, "_", x$adjusted_counts@Dimnames[[2]])
-    return(x)
-  })
+for (capID in names(sc)) {
+  sc[[capID]]$adjusted_counts@Dimnames[[2]] <- paste0(capID, "_", sc[[capID]]$adjusted_counts@Dimnames[[2]])
+}
 
-## Replace cellranger filtered counts with soupx adjusted counts of filtered cells
-s.split.unfilt <- lapply(names(s.split.unfilt), function(capID) { #s.split.unfilt 
-  s.split.unfilt[[capID]]@assays$RNA@layers$counts <- 
-    sc[[capID]]$adjusted_counts[,colnames(s.split.unfilt[[capID]])]
-  return(s.split.unfilt[[capID]])
-})
-names(s.split.unfilt) <- names(sc)
+## Initialize a flag to track if all columns are present
+all_present <- TRUE
+
+## Check for missing columns in each capID
+for (capID in names(sc)) {
+  missing_cols <- setdiff(colnames(s.split.unfilt[[capID]]), colnames(sc[[capID]]$adjusted_counts))
+  if (length(missing_cols) > 0) {
+    warning(paste0("The following columns are missing in adjusted_counts for ", capID, ": ", paste(missing_cols, collapse = ", ")))
+    all_present <- FALSE  # Set flag to FALSE if any missing columns are found
+  } else {
+    message(paste0("All columns present for ", capID))
+  }
+}
+
+# Replace cellranger filtered counts with soupx adjusted counts of filtered cells
+if (all_present) {
+  ## Execute lapply only if all columns are present in all capIDs
+  message("All columns are present. Replacing cellranger filtered counts with soupx adjusted counts.")
+  s.split.unfilt <- lapply(names(s.split.unfilt), function(capID) {
+    s.split.unfilt[[capID]]@assays$RNA@layers$counts <- 
+      sc[[capID]]$adjusted_counts[, colnames(s.split.unfilt[[capID]])]
+    return(s.split.unfilt[[capID]])
+  })
+  names(s.split.unfilt) <- names(sc)
+} else {
+  # if all columns are not present, stop the script
+  stop("Not all columns are present. The replacement was not executed.")
+}
 
 write_rds(s.split.unfilt, here(report_rds_dir, "raw_captures.rds"))
 
@@ -1108,12 +1132,12 @@ write_csv(adt_per_sample_total_counts, here(paste0("saved_rds/report-", report_n
 write_csv(HTOdoublet_counts, here(paste0("saved_rds/report-", report_number), "HTOdoublet_counts.csv"))
 write_csv(scDbl_counts, here(paste0("saved_rds/report-", report_number), "scDbl_counts.csv"))
 
-write_rds(singler_out, here(paste0("saved_rds/report-", report_number), "singler_out-", getDate(), ".rds"))
+write_rds(singler_out, here(paste0("saved_rds/report-", report_number), paste0("singler_out-", getDate(), ".rds")))
 
-write_rds(s.split.unfilt, here(paste0("saved_rds/report-", report_number), "s.split.unfilt-", getDate(), ".rds")) # for filtering plots
-write_rds(s.demux, here(paste0("saved_rds/report-", report_number), "s.demux-", getDate(), ".rds"))
-write_rds(s.filtADT.split, here(paste0("saved_rds/report-", report_number), "s.filtADT.split-", getDate(), ".rds"))
-write_rds(s.filtADT, here(paste0("saved_rds/report-", report_number), "s.filtADT-", getDate(), ".rds")) # For downstream processing
+write_rds(s.split.unfilt, here(paste0("saved_rds/report-", report_number), paste0("s.split.unfilt-", getDate(), ".rds"))) # for filtering plots
+write_rds(s.demux, here(paste0("saved_rds/report-", report_number), paste0("s.demux-", getDate(), ".rds")))
+write_rds(s.filtADT.split, here(paste0("saved_rds/report-", report_number), paste0("s.filtADT.split-", getDate(), ".rds")))
+write_rds(s.filtADT, here(paste0("saved_rds/report-", report_number), paste0("s.filtADT-", getDate(), ".rds"))) # For downstream processing
 ```
 
 # 7 - Render report
