@@ -177,7 +177,7 @@ findSoupXFiles <- function(base_path,
 }
 
 ## Load cellranger counts matrices
-readCounts10x <- function (capID, filepath, min.cells = 0, min.features = 0, strip.suffix = FALSE, format = "tsv") 
+readCounts10x <- function (capID, filepath, min.cells = 0, min.features = 0, strip.suffix = FALSE, format = "tsv", cr_method="multi") 
 {
   # Read in counts
   if (format == "tsv") {
@@ -192,11 +192,19 @@ readCounts10x <- function (capID, filepath, min.cells = 0, min.features = 0, str
   }
   
   # Add capID to front of cell barcode to prevent collisions when merging across clusters
-  counts_in <- lapply(counts_in, function(x) {
-    x@Dimnames[[2]] <- paste0(capID, "_", x@Dimnames[[2]])
-    return(x)
-  })
-  
+  if (cr_method == "multi") {
+    # perform on list of assays
+    counts_in <- lapply(counts_in, function(x) {
+      x@Dimnames[[2]] <- paste0(capID, "_", x@Dimnames[[2]])
+      return(x)
+    })
+  } else if (cr_method == "count") {
+    #perform on single assay
+    counts_in@Dimnames[[2]] <- paste0(capID, "_", counts_in@Dimnames[[2]])
+  } else {
+    errorCondition("Must specify whether input format is 'multi' or 'count'")
+  }
+
   # Get gene expression counts; counts_in would be list if multimodal
   if ("Gene Expression" %in% names(counts_in)) {
     gex_counts <- counts_in$`Gene Expression`
