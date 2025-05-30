@@ -69,6 +69,8 @@ po/*~
 # RStudio Connect folder
 rsconnect/
 
-# MAC
-
+# Mac
 .DS_Store
+
+# NFS
+.nfs*

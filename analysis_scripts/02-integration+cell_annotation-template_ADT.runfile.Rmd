@@ -1,0 +1,612 @@
+---
+title: "integration and cell annotation"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Libraries
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+# library(RColorBrewer)
+library(clustree)
+library(ggpubr)
+library(harmony)
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+```
+
+# 0 - Setup
+
+## 0.1 - Report metadata
+
+```{r}
+## Report metadata
+report_author <- "Micah Fletcher"
+project_name <- "p24000_template"
+report_number <- "3-ADT"
+report_title_root <- "integration+labeling"
+report_rds_dir <- paste0("saved_rds/report-", report_number)
+
+## Save rds here:
+dir.create(here(report_rds_dir))
+```
+
+## 0.2 -  Load full dataset
+
+```{r}
+s.full <- read_rds(here("saved_rds/report-01-ADT/s.filtADT-20240815.rds"))
+sample_metadata <- read_csv(here("saved_rds/report-01-ADT/sample_metadata.csv"))
+```
+
+## 0.3 - Analysis config
+
+I recommend running through this whole script the first time without regressing out CC, because it's much faster for debugging, and you can compare the report with no regress vs. with regression with a second pass.
+```{r}
+vars.to.regress = NULL
+# vars.to.regress = "CC.Difference"
+```
+
+
+## 0.3 - Preliminary cell labeling
+
+This has already been run at the end of the processing script, but I like to re-run it here in case any additional filtering happened after that (and so we can use this script as a template for subsetting and re-clustering finer cell types).
+
+```{r}
+ref <- celldex::BlueprintEncodeData()
+
+c(s.full, singler_out) %<-% runSingleR(
+  obj.seurat = s.full, ref = ref,  labels = ref$label.main,
+  meta.prefix = "BP.main", de.method = "classic")
+```
+
+## 0.4 - Assigning readable names to ADTs
+
+The default labels for ADTs are verbose and rather inscrutable. The replacement labels used in this template were modified from descriptions Rama gave, and it is a good idea to ask an investigator for their interpretations or shorthand names to help with interpretation and visualizations.
+
+```{r, fig.width=12, fig.height=12}
+adts_targeted_cat_nums <- c(344651, 301071, 302363, 305651, 310951, 331231, 
+                            302963, 302853, 307663, 301359, 371521, 301859, 
+                            302065, 306045, 331547, 320837, 343127) %>% as.character()
+
+adt_apriori_markers_long <- c(
+  "CD4" =	"CD4 T cells, some DCs",
+  "CD8a" =	"CD8 T cells, NK cells (only in NHPs)",
+  "CD28" = "co-stimulatory molecule, expressed by naïve T cells and central memory T cells",
+  "CD314" = "NKG2D - expressed by NK cells and some CD8 T cells",
+  "CD95" = "memory T cells",
+  "CD69" = "activated T cells, tissue resident T and B cells",
+  "CD20" = "B cells",
+  "HLA-DR" = "B cells, APCs (pDC, CD11c+ DC, CD1+ DC, CD14+ monocytes, CD16+ monocytes)",
+  "CD14" = "classical and intermediate monocytes",
+  "CD16" = "intermediate monocytes, non-classical/inflammatory monocytes, NK cells",
+  "CD11b" = "macrophages, tissue monocytes, other innate cells",
+  "CD123" = "pDC, some T cells",
+  "CD1c" = "some innate cells/APCs",
+  "CD11c" = "myeloid/conventional DC",
+  "TCRgd" = "T cell gd",
+  "CD27" = "naïve and activated effector T cells as well as NK cells and activated B cells",
+  "CD7" =  "thymocytes and mature T cells")
+
+adt_apriori_markers_short <- c(
+  "CD4" =	"T CD4 + some DCs",
+  "CD8a" =	"T CD8 + NK",
+  "CD28" = "T naïve + T central memory",
+  "CD314" = "NK + some T CD8",
+  "CD95" = "T memory",
+  "CD69" = "T activated + tiss res T and B",
+  "CD20" = "B",
+  "HLA-DR" = "B + APCs (pDC+DC+mono)",
+  "CD14" = "mono classical + mono intermediate",
+  "CD16" = "mono intermed + mono nonclass/inflamm + NK",
+  "CD11b" = "macro + mono tiss res + other innate",
+  "CD123" = "pDC + some T",
+  "CD1c" = "some innate/APCs",
+  "CD11c" = "myeloid/cDC",
+  "TCRgd" = "Tgd",
+  "CD27" = "T naïve + T act eff + NK + B act",
+  "CD7" =  "thymocytes + T mature")
+
+adt_short_name_tbl <- tibble(short_name = names(adt_apriori_markers_long), 
+                   marker_of_long = adt_apriori_markers_long,
+                   marker_of_short = adt_apriori_markers_short) %>%
+  full_join(tibble("original_name" = rownames(s.full@assays$ADT)) %>% 
+              mutate(cat_num = str_extract(original_name, "[0-9]*$"),
+                     short_name = str_extract(original_name, "^[A-Z0-9a-z]*"),
+                     short_name = ifelse(short_name == "TCR", "TCRgd", ifelse(short_name == "HLA", "HLA-DR", short_name)))) %>%
+  mutate(marker_of_short = str_replace_all(marker_of_short, " ", "_"))
+```
+
+# 1 - Integration
+
+## 1.1 - Gene expression
+
+```{r}
+DefaultAssay(s.full) <- "RNA"
+```
+
+### 1.1.1 - Merged
+
+Find variable features agnostic to sample origin.
+
+```{r}
+s.full <- NormalizeData(s.full, verbose = F)
+s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
+s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
+s.full <- RunPCA(s.full, npcs = 30, reduction.name = "pca.merge.rna", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.merge.rna", reduction.name = "umap.merge.rna", verbose = F)
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.merge.rna", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.1.2 -  Split
+
+Find the shared variable features among all samples.
+
+```{r}
+s.full[["RNA"]] <- split(s.full[["RNA"]], f = s.full$capID)
+
+s.full <- NormalizeData(s.full, verbose = F)
+s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
+s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
+s.full <- RunPCA(s.full, npcs = 30, reduction.name = "pca.split.rna", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:30, reduction = "pca.split.rna", reduction.name = "umap.split.rna", verbose = F)
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.split.rna", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.1.3 - Seurat CCA
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = CCAIntegration, verbose = F,
+                  orig.reduction = "pca.split.rna", new.reduction = "integ.cca.rna")
+s.full <- s.full %>% RunUMAP(reduction = "integ.cca.rna", dims = 1:30, reduction.name = "umap.cca.rna")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.cca.rna", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.1.4 - Seurat RPCA
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = RPCAIntegration, verbose = F,
+                  orig.reduction = "pca.split.rna", new.reduction = "integ.rpca.rna") %>%
+  RunUMAP(reduction = "integ.rpca.rna", dims = 1:30, reduction.name = "umap.rpca.rna")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.rpca.rna", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.1.5 - Harmony
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = HarmonyIntegration, verbose = F,
+                  orig.reduction = "pca.split.rna", new.reduction = "integ.harmony.rna") %>%
+  RunUMAP(reduction = "integ.harmony.rna", dims = 1:30, reduction.name = "umap.harmony.rna")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.harmony.rna", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+## 1.2 - Antibodies
+
+```{r}
+DefaultAssay(s.full) <- "ADT"
+prots <- rownames(s.full[["ADT"]])
+VariableFeatures(s.full) <- rownames(s.full[["ADT"]])
+```
+
+Note that you can technically create a UMAP using the ADT features directly instead of first running PCA, but (as far as I'm aware) you need the PCA to calculate neighbor graphs and thus clusters and run WNN. I could be wrong, but I think there's little harm in sticking to the PCA method.
+
+See below for examples of the two methods
+```{r}
+s.full <- NormalizeData(s.full, assay = "ADT", normalization.method = "CLR", margin = 2, verbose = F)
+# # Run UMAP on adt features (not pca)
+# s.full <- RunUMAP(s.full, features = prots, reduction.name = 'umap.adt.feat', verbose = F)
+# 
+# # Run UMAP on adt pca (required to run harmony)
+# s.full <- ScaleData(s.full, verbose = F)
+# s.full <- RunPCA(s.full, features = prots, npcs = length(prots), reduction.name = "pca.adt", verbose = F)
+# s.full <- RunUMAP(s.full, reduction = "pca.adt", dims = 1:length(prots)-1, reduction.name = 'umap.adt', verbose = F)
+```
+
+### 1.2.1 - Merged
+
+```{r}
+s.full <- NormalizeData(s.full, normalization.method = "CLR", margin = 2, verbose = F)
+s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
+s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
+s.full <- RunPCA(s.full, npcs = length(prots), reduction.name = "pca.merge.adt", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:length(prots)-1, reduction = "pca.merge.adt", reduction.name = "umap.merge.adt", verbose = F)
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.merge.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.2.2 -  Split
+
+```{r}
+s.full[["ADT"]] <- split(s.full[["ADT"]], f = s.full$capID)
+
+s.full <- NormalizeData(s.full, normalization.method = "CLR", margin = 2, verbose = F)
+s.full <- FindVariableFeatures(s.full, selection.method = "vst", nfeatures = 2000, verbose = F)
+s.full <- ScaleData(s.full, vars.to.regress = vars.to.regress, verbose = F)
+s.full <- RunPCA(s.full, npcs = length(prots), reduction.name = "pca.split.adt", verbose=F)
+s.full <- RunUMAP(s.full, dims = 1:length(prots)-1, reduction = "pca.split.adt", reduction.name = "umap.split.adt", verbose = F)
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.split.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.2.3 - Seurat CCA
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = CCAIntegration, verbose = F,
+                  orig.reduction = "pca.split.adt", new.reduction = "integ.cca.adt")
+s.full <- s.full %>% RunUMAP(reduction = "integ.cca.adt", dims = 1:length(prots)-1, reduction.name = "umap.cca.adt")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.cca.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.2.4 - Seurat RPCA
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = RPCAIntegration, verbose = F,
+                  orig.reduction = "pca.split.adt", new.reduction = "integ.rpca.adt") %>%
+  RunUMAP(reduction = "integ.rpca.adt", dims = 1:30, reduction.name = "umap.rpca.adt")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.rpca.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+### 1.2.5 - Harmony
+
+```{r}
+s.full <- s.full %>% 
+  IntegrateLayers(method = HarmonyIntegration, verbose = F,
+                  orig.reduction = "pca.split.adt", new.reduction = "integ.harmony.adt") %>%
+  RunUMAP(reduction = "integ.harmony.adt", dims = 1:30, reduction.name = "umap.harmony.adt")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "grp_chl") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 5}
+DimPlot(s.full, reduction = "umap.harmony.adt", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 4)
+```
+
+
+## 1.3 - Weighted-nearest neighbors integration (GEX + ADT)
+
+This template uses the harmony reductions as inputs to WNN, but you could try other methods if they look better on the RNA-only or ADT-only UMAPs.
+
+### 1.3.1 - Integration
+
+```{r}
+s.full <- FindMultiModalNeighbors(s.full, reduction.list = list("harmony.rna", "harmony.adt"),
+                                  dims.list = list(1:30, 1:length(prots)-1),
+                                  knn.graph.name = "wknn.harmony",
+                                  snn.graph.name = "wsnn.harmony",
+                                  weighted.nn.name = "weighted.nn.harmony",
+                                  modality.weight.name = list("mmn.weight.rna.harmony", "mmn.weight.adt.harmony"))
+
+s.full <- RunUMAP(s.full, nn.name = "weighted.nn.harmony", reduction.name = "umap.harmony.wnn", reduction.key = "wnnUMAP.harmony_")
+```
+
+```{r}
+DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "animalID") + theme(aspect.ratio = 1)
+DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "BP.main.pruned.labels")
+DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "Phase")
+```
+
+```{r, fig.width = 10, fig.height = 10}
+DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "BP.main.pruned.labels", split.by = "animalID", ncol = 5)
+```
+
+# 2 - Clustering
+
+You can hopefully narrow down the best performing integration methods by eyeballing how well samples cluster together in UMAP space, while still retaining the preliminary cell type labels as separate in UMAP space. If so and you are satisfied with your choice, you can just run clustering on the WNN of the results here (e.g. just RPCA) to save time. If not, you can run clustering for several RNA-based and ADT-based methods and compare to pick a final integration methods to input into WNN.
+
+## 2.1 - RNA
+
+### 2.1.1 - Split
+
+```{r}
+s.full <- FindNeighbors(s.full, reduction = "pca.split.rna", dims = 1:30, graph.name = c("split.rna.nn", "split.rna.snn"))
+s.full <- FindClusters(s.full, graph.name = "split.rna.snn", resolution = seq(0.1, 1, 0.1), verbose = FALSE)
+
+## I don't know why, but sometimes the clusters are re-leveled in order as if characters rather than numeric
+for (res in colnames(s.full@meta.data)[grepl("split.rna.snn_res", colnames(s.full@meta.data))]) {
+  s.full@meta.data[[res]] <- fct_inseq(s.full@meta.data[[res]])
+}
+```
+
+```{r}
+for (res in colnames(s.full@meta.data)[grepl("split.rna.snn_res", colnames(s.full@meta.data))]) {
+  print(
+    DimPlot(s.full, reduction = "umap.split.rna", group.by = res, label = T) + theme(aspect.ratio = 1)
+    )
+}
+```
+
+### 2.1.2 - Harmony
+
+```{r}
+s.full <- FindNeighbors(s.full, reduction = "integ.harmony.rna", dims = 1:30, graph.name = c("harmony.rna.nn", "harmony.rna.snn"))
+s.full <- FindClusters(s.full, graph.name = "harmony.rna.snn", resolution = seq(0.1, 1, 0.1), verbose = FALSE)
+
+## I don't know why, but sometimes the clusters are re-leveled in order as if characters rather than numeric
+for (res in colnames(s.full@meta.data)[grepl("harmony.rna.snn_res", colnames(s.full@meta.data))]) {
+  s.full@meta.data[[res]] <- fct_inseq(s.full@meta.data[[res]])
+}
+```
+
+```{r}
+for (res in colnames(s.full@meta.data)[grepl("harmony.rna.snn_res", colnames(s.full@meta.data))]) {
+  print(
+    DimPlot(s.full, reduction = "umap.harmony.rna", group.by = res, label = T) + theme(aspect.ratio = 1)
+    )
+}
+```
+
+## 2.2 - ADT
+
+### 2.1.1 - Split
+
+```{r}
+s.full <- FindNeighbors(s.full, reduction = "pca.split.adt", dims = 1:30, graph.name = c("split.adt.nn", "split.adt.snn"))
+s.full <- FindClusters(s.full, graph.name = "split.adt.snn", resolution = seq(0.1, 1, 0.1), verbose = FALSE)
+
+## I don't know why, but sometimes the clusters are re-leveled in order as if characters rather than numeric
+for (res in colnames(s.full@meta.data)[grepl("split.adt.snn_res", colnames(s.full@meta.data))]) {
+  s.full@meta.data[[res]] <- fct_inseq(s.full@meta.data[[res]])
+}
+```
+
+```{r}
+for (res in colnames(s.full@meta.data)[grepl("split.adt.snn_res", colnames(s.full@meta.data))]) {
+  print(
+    DimPlot(s.full, reduction = "umap.split.adt", group.by = res, label = T) + theme(aspect.ratio = 1)
+    )
+}
+```
+
+### 2.1.2 - Harmony
+
+```{r}
+s.full <- FindNeighbors(s.full, reduction = "integ.harmony.adt", dims = 1:30, graph.name = c("harmony.adt.nn", "harmony.adt.snn"))
+s.full <- FindClusters(s.full, graph.name = "harmony.adt.snn", resolution = seq(0.1, 1, 0.1), verbose = FALSE)
+
+## I don't know why, but sometimes the clusters are re-leveled in order as if characters rather than numeric
+for (res in colnames(s.full@meta.data)[grepl("harmony.adt.snn_res", colnames(s.full@meta.data))]) {
+  s.full@meta.data[[res]] <- fct_inseq(s.full@meta.data[[res]])
+}
+```
+
+```{r}
+for (res in colnames(s.full@meta.data)[grepl("harmon.adty.snn_res", colnames(s.full@meta.data))]) {
+  print(
+    DimPlot(s.full, reduction = "umap.harmony.adt", group.by = res, label = T) + theme(aspect.ratio = 1)
+    )
+}
+```
+
+## 2.3 - WNN
+
+```{r}
+s.full <- FindNeighbors(s.full, reduction = "pca.wnn", dims = 1:30, graph.name = c("wnn.nn", "wnn.snn"))
+s.full <- FindClusters(s.full, graph.name = "wnn.snn", resolution = seq(0.1, 1, 0.1), verbose = FALSE)
+
+## I don't know why, but sometimes the clusters are re-leveled in order as if characters rather than numeric
+for (res in colnames(s.full@meta.data)[grepl("wnn.snn_res", colnames(s.full@meta.data))]) {
+  s.full@meta.data[[res]] <- fct_inseq(s.full@meta.data[[res]])
+}
+```
+
+```{r}
+for (res in colnames(s.full@meta.data)[grepl("wnn.snn_res", colnames(s.full@meta.data))]) {
+  print(
+    DimPlot(s.full, reduction = "umap.wnn", group.by = res, label = T) + theme(aspect.ratio = 1)
+    )
+}
+```
+
+```{r}
+clustree::clustree(s.full, prefix = "wsnn.harmony_res.")
+```
+
+## 2.4 - Choose cluster resolution for downstream analysis
+
+Going with 0.3
+```{r}
+Idents(s.full) <- "wsnn.harmony_res.0.3"
+```
+
+# 3 - Cell type annotation
+
+## 3.1 - WNN-based clusters
+
+### 3.1.1 - SingleR and BluePrint database
+
+Overview of previous report + per-label heatmaps?
+
+### 3.1.2 - Manual labeling via ADT data
+
+```{r, fig.weight=9, fig.height=9}
+DimPlot(s.full, reduction = "umap.harmony.wnn", group.by = "wsnn.harmony_res.0.3", label = T) + theme(aspect.ratio = 1)
+```
+
+```{r, fig.height = 8, fig.width = 7}
+DotPlot(s.full, features = adt_short_name_tbl$original_name, group.by = "wsnn.harmony_res.0.3", cluster.idents = T) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_x_discrete(labels = adt_short_name_tbl$short_name)
+```
+
+```{r, fig.height = 11, fig.width = 7}
+DotPlot(s.full, features = adt_short_name_tbl$original_name, group.by = "wsnn.harmony_res.0.3", cluster.idents = T) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  scale_x_discrete(labels = adt_short_name_tbl$marker_of_short)
+```
+
+# 6 - Find markers
+
+```{r}
+markers <- list()
+```
+
+## 6.1 - RNA
+
+```{r}
+DefaultAssay(s.full) <- "RNA"
+s.full <- s.full %>% ScaleData(features = rownames(s.full))
+markers$rna <- s.full %>%
+  FindAllMarkers(assay = "RNA", group.by = "wsnn.harmony_res.0.3", use.test = "wilcox", 
+                 logfc.threshold = -Inf, return.thresh = 1, min.pct = 0.1)
+```
+
+```{r, fig.width = 12, fig.height = 25}
+markers$rna %>% 
+  filter(p_val_adj < 0.0001, avg_log2FC > 0.25) %>% 
+  arrange(cluster, p_val_adj, desc(avg_log2FC)) %>%
+  group_by(cluster) %>% slice_head(n=10) %>% pull(gene) %>% unique() %>%
+DoHeatmap(subset(s.full, downsample=500), group.by = "wsnn.harmony_res.0.3", assay = "RNA", features = ., size = 4) + 
+  theme(axis.text.y = element_text(size=8))
+```
+
+## 6.2 - ADT
+
+```{r}
+DefaultAssay(s.full) <- "ADT"
+
+markers$adt <- s.full %>%
+  FindAllMarkers(assay = "ADT", group.by = "wsnn.harmony_res.0.3", use.test = "wilcox", 
+                 logfc.threshold = -Inf, return.thresh = 1, min.pct = 0.1)
+```
+
+```{r, fig.width = 12, fig.height = 25}
+markers$adt %>% 
+  group_by(cluster) %>%
+  arrange(cluster, p_val_adj, desc(avg_log2FC)) %>%
+  filter(p_val_adj < 0.0001, avg_log2FC > 0.25) %>% slice_head(n=15) %>% pull(gene) %>% unique() %>%
+DoHeatmap(subset(s.full, downsample = 500), group.by = "wsnn.harmony_res.0.3", assay = "ADT", features = ., size = 4) + 
+  theme(axis.text.y = element_text(size=8))
+```
+
+
+# 7 - Write rds for downstream analyses
+
+```{r}
+write_rds(s.full, here(paste0("saved_rds/report-", report_number), "s.full.rds"))
+```
+
+# 8 - Render report
+
+## 8.1 - Set filename
+
+```{r}
+report_filename <- paste0(project_name, "-", 
+                          report_number, "-",
+                          report_title_root, "-",
+                          format(Sys.Date(), "%Y%m%d"), ".html")
+```
+
+## 8.2 - Render
+
+```{r}
+rmarkdown::render("20-APC-subset+recluster-format.Rmd",
+                  output_file = report_filename,
+                  output_dir = here("reports/"))
+```
+
+
+

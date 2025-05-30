@@ -1,0 +1,141 @@
+---
+title: '00 - Cell ranger QC'
+author: "ENPRC Genomics Core"
+date: '`r Sys.Date()`'
+output: html_document
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE) 
+
+library(tidyverse)  ## General R logic
+library(here)       ## Easier specification of file locations
+library(yaml)       ## parses config yaml
+```
+
+This script performs quality checks on cellranger processed data. It is not intended to perform any data manipulation. This should be lightweight, but the format file is separated from the runfile for ease of use and manipulating report aesthetics. The runfile (current file) should be ran all the way through, with the last step being to render the format file based on objects in the environment produced by the runfile. 
+
+This runfile is in a html_notebook format so you can view all the outputs in a single HTML if that's useful, but the final report should be the one rendered by the format file into the reports folder (see final chunk).
+
+You may have to adjust some filter/select functions here, as cellranger seems to change their output naming conventions frequently. 
+
+Also note that not all projects will include each of the following sections. If for example the dataset doesn't have any ADT data, just comment out that section (or set `eval=FALSE` in the chunk header) here and comment out the section in the format file.
+
+# Read config files
+```{r}
+config <- yaml.load_file(here("config/config-template_RNA.yml"))
+samplesheet <- read.table(here('config/samplesheet-template_RNA.txt'), header = TRUE)
+```
+
+# Report metadata
+```{r}
+project_name <- "p24000_template"
+report_number <- "00-RNA"
+report_author <- "Micah Fletcher"
+report_title_root <- "cellranger_qc"
+
+getDate <- function() {
+  format(Sys.Date(), "%Y%m%d")
+}
+```
+
+
+# Gather metric files
+
+```{r}
+## This may be moved to package eventually if it seems robust enough
+capture_cellranger_multi_qc_metrics <- function(samplesheet, config){
+  files <- tryCatch({
+    lapply(samplesheet$FileID,
+           function(x) {
+             read.csv(Sys.glob(file.path(config$rootDir, config$alignmentDir, x, "outs/metrics_summary.csv")))
+             })
+    }, error = function(e) e)
+  if (inherits(files, "error")) {
+    files <- lapply(samplesheet$FileID,
+           function(x) {
+             read.csv(Sys.glob(file.path(config$rootDir, config$alignmentDir,x,"outs/per_sample_outs/",x,"metrics_summary.csv")))
+             })
+  }
+
+  qc <- data.table::rbindlist(files, use.names=TRUE, fill=TRUE,idcol="ID")
+  qc$ID <- plyr::mapvalues(qc$ID, from=1:length(samplesheet$Label), to=samplesheet$Label)
+  return(qc)
+}
+
+## Use the FileIDs from the samplesheet to find metric files in the
+## cellranger output directory as specified in the config
+qc_metrics <- capture_cellranger_multi_qc_metrics(samplesheet, config) 
+
+## Some additional formatting is applied to complex values
+qc_metrics <- qc_metrics %>%
+  mutate(Metric.Value = readr::parse_number(Metric.Value)) %>%
+  mutate(ID = factor(ID, levels = unique(gtools::mixedsort(ID)))) %>%
+  arrange(ID) %>%
+  rename(metric_name = Metric.Name, metric_value = Metric.Value)
+```
+
+# GEX libraries
+
+```{r}
+qc_metrics_gex <- qc_metrics %>%
+  filter(Library.Type == 'Gene Expression') %>%
+  # filter(Category == 'Cells') %>%
+  filter(metric_name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells'))
+```
+
+
+## Plot
+
+```{r, fig.width=14, fig.height=6}
+qc_metrics %>%
+  filter(Library.Type == 'Gene Expression') %>%
+  # filter(Category == 'Cells') %>%
+  filter(metric_name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  ggplot(aes(x=ID, y=metric_value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~metric_name, 
+               scales='free_y',
+               ncol=3,
+               labeller = labeller(metric_name = label_wrap_gen(100))) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'GEX') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+```
+
+## Table
+
+```{r}
+qc_metrics %>% 
+  filter(Library.Type=='Gene Expression') %>% 
+  select(ID, metric_name, metric_value) %>%
+  filter(metric_name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  pivot_wider(names_from = metric_name, values_from = metric_value)
+```
+
+# Render report(s)
+
+## Set filenames
+
+```{r}
+report_filename <- paste0(project_name, "-", report_number, "-", 
+                          report_title_root, "-", getDate(), ".html")
+```
+
+## Render report
+```{r}
+rmarkdown::render(input = here("analysis_scripts/00-CR-template_RNA.format.Rmd"),
+                  output_file = report_filename,
+                  output_dir = here('reports'))
+```

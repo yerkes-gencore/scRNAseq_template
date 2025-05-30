@@ -1,0 +1,5 @@
+# root dir is base of mounted file system, might change by machine
+# The default should be appropriate for mounted systems
+rootDir: '/yerkes-cifs/runs/'
+# cellranger counts output parent folder
+alignmentDir: 'Analysis/2024_Analyses/p24021_Michael/p24021_Michael_Processing'

@@ -1,0 +1,70 @@
+---
+title: '`r report_filename`'
+author: |
+  | `r report_author`
+  | ENPRC Genomics Core"
+date: '`r Sys.Date()`'
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 3
+---
+
+```{r, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 8, fig.height = 6) 
+
+library(kableExtra)   ## Needed if rendering tables
+```
+
+<!-- This file will not execute by itself. It should be called within the  -->
+<!-- runfile to render the final report. You can arrange figures, add explanations, -->
+<!-- and do other aesthetic tweaks here. -->
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+In this report, we review some of the key quality control metrics calculated by cellranger.
+
+# Gene expression
+
+```{r, fig.width=14, fig.height=6}
+qc_metrics %>%
+  filter(Library.Type == 'Gene Expression') %>%
+  # filter(Category == 'Cells') %>%
+  filter(metric_name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  ggplot(aes(x=ID, y=metric_value, fill=ID)) +
+    geom_col() + 
+    facet_wrap(~metric_name, 
+               scales='free_y',
+               ncol=3,
+               labeller = labeller(metric_name = label_wrap_gen(100))) +
+    theme_bw() +
+    labs(x = 'Sample', y = 'Value', title = 'GEX') +
+  theme(axis.text.x = element_text(angle=45, hjust = 1))
+```
+
+```{r}
+qc_metrics %>% 
+  filter(Library.Type=='Gene Expression') %>% 
+  select(ID, metric_name, metric_value) %>%
+  filter(metric_name %in% c('Cells',
+                            'Median genes per cell',
+                            'Median UMI counts per cell',
+                            'Confidently mapped reads in cells')) %>%
+  pivot_wider(names_from = metric_name, values_from = metric_value)
+```
+

@@ -1,0 +1,393 @@
+---
+title: "`r report_filename`"
+author: |
+  | `r report_author`
+  | ENPRC Genomics Core
+date: "`r Sys.Date()`"
+output: 
+  rmdformats::robobook:
+    fig_width: 9
+    toc_depth: 3
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+library(kableExtra)
+```
+
+```{=html}
+<style type="text/css">
+.book .book-body .page-inner {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+details > summary {
+  display: list-item;
+}
+</style>
+```
+
+# 1 - Sample metadata
+
+Below are the sample metadata that we used for setting up the analysis.
+
+```{r}
+sample_metadata %>% knitr::kable()  %>%
+  kable_styling(full_width = F)
+```
+
+
+# 2 - soupX
+
+<details>
+
+<summary>What is ambient RNA?</summary>
+
+"In droplet based, single cell RNA-seq experiments, there is always a
+certain amount of background mRNAs present in the dilution that gets
+distributed into the droplets with cells and sequenced along with them.
+The net effect of this is to produce a background contamination that
+represents expression not from the cell contained within a droplet, but
+the solution that contained the cells.
+
+This collection of cell free mRNAs floating in the input solution
+(henceforth referred to as "the soup") is created from cells in the
+input solution being lysed. Because of this, the soup looks different
+for each input solution and strongly resembles the expression pattern
+obtained by summing all the individual cells." [taken from SoupX
+vignette](https://rawcdn.githack.com/constantAmateur/SoupX/204b602418df12e9fdb4b68775a8b486c6504fe4/inst/doc/pbmcTutorial.html)
+
+Removing ambient RNA can clean input counts, but does represent a
+somewhat 'unsupervised' curration of the data that is a bit of a black
+box.
+
+[Further
+reading](https://academic.oup.com/gigascience/article/9/12/giaa151/6049831)
+
+</details>
+
+```{r}
+knitr::kable(soupx_results,
+             col.names = c('Sample',
+                           'Lower estimate',
+                           'Contamination portion',
+                           'Upper estimate'),
+             caption = 'portion of 0.01 = 1% contamination')  %>%
+  kable_styling(full_width = F)
+```
+
+
+# 3 - Gene expression processing
+
+All processing is done on a capture level. We performed standard
+filtering on cells based on mitochondrial and ribosomal gene expression,
+umis, and gene count. We've also calculated metrics for ambient RNA
+contamination and cell-cycle separation without performing
+any correction for them. Finally we perform a doublet detection to identify
+GEMs with more than 1 cell. These may affect the quality and quantity of
+data used for analysis downstream, so we want to discuss whether to
+perform the corrections.
+
+## 3.1 - Removing low count cells {.tabset}
+
+The plots on the left include the threshold (vertical black line) used
+to filter cells for analysis. The plots on the right of nGene vs nUMI
+show the distribution of cell complexity in a capture with a simple
+best-fit line to show the general trend.
+
+Explanation of metrics:
+
+-   **nUMI:** Number of unique transcripts
+-   **nGene:** Number of genes with detected transcripts
+-   **Log10GenesPerUmi:** $log10(nGene)/log10(nUMI)$ A proxy for diversity of expression across genes (i.e. "complexity score"). Low complexity cells (e.g. red blood cells) have expression dominated by only a few genes.
+-   **mitoRatio:** Proportion of reads coming from mitochondrial genes.
+    High mitochondrial portion often indicates low quality or dying
+    cells.
+-   **riboRatio:** Proportion of reads coming from ribosomal genes. High
+    riboRatio may suggest degradation of mRNA.
+
+### Before
+
+```{r, fig.width=14, fig.height=10, message=FALSE, warning=FALSE}
+filtName <- 'input'
+plotQCRidgesJoint(s.split.unfilt, filtName = filtName, title = filtName, 
+                  split_by = "capID",  color_by = "mitoRatio",
+                  cutoffs = NULL, facet_colors = TRUE)
+```
+
+### Filtering out outliers
+Where outliers are defined as any cells falling outside median ± median absolute deviation × 4 for a particular capture of `nUMI`, `nGene`, or `log10GenesPerUMI`. 
+```{r, fig.width=14, fig.height=10, message=FALSE, warning=FALSE}
+filtName <- 'outliers'
+plotQCRidgesJoint(s.split.unfilt, filtName = filtName, title = filtName, 
+                  split_by = "capID",  color_by = "mitoRatio",
+                  cutoffs = NULL, facet_colors = TRUE)
+```
+
+### After additional filtering
+There was still a bit of a left tail for `nUMI` and `nGene` so we applied a further filter of `nUMI > 1000` and `nGene > 500` to remove additional likely low-quality cells.
+```{r, fig.width=14, fig.height=10, message=FALSE, warning=FALSE}
+filtName <- 'adjusted'
+plotQCRidgesJoint(s.split.unfilt, filtName = filtName, title = filtName, 
+                  split_by = "capID",  color_by = "mitoRatio",
+                  cutoffs = NULL, facet_colors = TRUE)
+```
+
+## 3.2 - Hash demultiplexing
+
+```{r}
+HTOdoublet_counts %>% knitr::kable()
+```
+
+## 3.3 - Quality control metrics in RNA-based UMAP space {.tabset}
+
+### nGene
+**nGene:** Number of genes with detected transcripts
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "nGene", legend = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nGene", face = "bold", size = 14))
+```
+
+### nUMI
+**nUMI:** Number of unique transcripts
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "nUMI", legend = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nUMI", face = "bold", size = 14))
+```
+
+### Log10GenesPerUMI
+**Log10GenesPerUMI:** $log10(nGene)/log10(nUMI)$ A proxy for diversity of expression across genes (i.e. "complexity score"). Low complexity cells (e.g. red blood cells) have expression dominated by only a few genes
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "log10GenesPerUMI", legend = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("log10GenesPerUMI", face = "bold", size = 14))
+```
+
+### mitoRatio
+**mitoRatio:** Proportion of reads coming from mitochondrial genes.
+    High mitochondrial portion often indicates low quality or dying
+    cells.
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "mitoRatio", legend = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("mitoRatio", face = "bold", size = 14))
+```
+
+### riboRatio
+**riboRatio:** Proportion of reads coming from ribosomal genes. High
+    riboRatio may suggest degradation of mRNA.
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "riboRatio", legend = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("riboRatio", face = "bold", size = 14))
+```
+
+### Cell cycle phase
+<details>
+
+<summary>What are cell-cycle effects?</summary>
+
+Cells at different stages of growth can exhibit unique expression
+profiles. For some studies, detecting signal between cells of different
+stages in not interesting and can confound or obscure results of
+interest. A set of cell-cycle marker genes can be used to approximate
+growth stage and regress expression data to ignore variance due to cell
+cycle.
+
+Note that this is probably not a desirable outcome for studies focusing
+on cell differentiation or other inquiries related to cell growth &
+cycling.
+
+[Further
+reading](https://github.com/hbctraining/scRNA-seq_online/blob/master/lessons/cell_cycle_scoring.md)
+
+</details>
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "Phase", label.size=0) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("cell cycle phase", face = "bold", size = 14))
+```
+
+
+<!-- ### Natural clustering -->
+<!-- *natural clustering* Clusters calculated by Seurat::FindClusters(resolution = 0.2) -->
+<!-- ```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=8} -->
+<!-- plotUMAP_split(s.filtADT.split, group.by = "seurat_clusters", label.size=0) %>% -->
+<!--   ggarrange(plotlist = ., common.legend = T, legend = "right") %>% -->
+<!--   annotate_figure(top = ggpubr::text_grob("seurat clusters", face = "bold", size = 14)) -->
+<!-- ``` -->
+
+
+## 3.4 - Doublet detection {.tabset}
+
+<details>
+
+<summary>What are doublets?</summary>
+
+Most single-cell technologies are imperfect at isolating a single-cells.
+It is not impossible to have 2 or more cells in the same GEM or well,
+where each cell would be tagged with the same barcode. After sequencing,
+the shared barcode makes all reads appear to have come from one cell.
+This has various negative effects, including obscuring real signal.
+
+Sometimes, real 'biological' doublets can occur with two cells in close
+contact. If these are of interest to your study, we may want to consider
+not removing doublets.
+
+[Further
+reading](https://www.cell.com/cell-systems/fulltext/S2405-4712(19)30073-0)
+
+</details>
+
+### Before doublet removal
+
+```{r}
+plotUMAP_split(s.demux, reduction = "umap_rna", group.by = "scDblFinder.class", label.size=3) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+```
+
+### After doublet removal
+
+```{r}
+### Doublets
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "scDblFinder.class", label.size=3) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2, common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+```
+
+
+### Summary table
+
+```{r}
+scDbl_counts %>% knitr::kable()
+```
+
+
+## 3.5 - QC filtering summary
+
+```{r, fig.width=8}
+qc_filtering_summary %>%
+  select(capID, -n_total, low_qual_cells = n_low_qual_cells, hashing_failed = n_hashing_failed, doublets = n_doublets, good_cells = n_good_cells) %>%
+  pivot_longer(cols = !capID, names_to = "filter_criterion", values_to = "nCells") %>%
+  mutate(filter_criterion = factor(filter_criterion, levels = c('low_qual_cells', 'hashing_failed', 'doublets', 'good_cells'))) %>%
+  ggplot(aes(x = capID,
+             y = nCells,
+             fill = filter_criterion)) +
+    geom_col() +
+    theme_classic() +
+    labs(x = 'Sample', y = 'Cell count', fill = NULL) +
+    scale_fill_manual(values = c('low_qual_cells' = 'red',
+                                 'hashing_failed' = 'orange',
+                                 'doublets' = 'yellow',
+                                 'good_cells' = 'green')) +
+  theme(axis.text.x = element_text(angle = 90))
+```
+
+
+## 3.6 - Reference mapping {.tabset}
+
+**These preliminary labels are derived from the SingleR package with Blueprint Encode reference.**
+
+**Note: These are preliminary labels, and we include them mainly as a sanity check and to help diagnose issues with qc metrics in the following section.**
+We will do a more in-depth look at the markers associated with each label in the next report, after integrating the samples into a single dataset.
+
+### Heatmap of scores
+
+The following heatmap shows the score of calculated by SingleR for each cell in the dataset for each potential label. The label chosen by SingleR is showing in the colored band at the top of the figure. The band below it shows which cells could not be reliably labeled because no single label was a clear winner.
+```{r}
+plotScoreHeatmap(singler_out, show.pruned = TRUE, fontsize=8, drop_levels = TRUE)
+```
+
+### Cell type proportions
+
+Proportion of cells predicted for each cell type in each capture.
+
+```{r}
+tibble(label = unlist(sapply(s.filtADT.split, function(x) x$BP.main.pruned.labels)), 
+       capID = unlist(sapply(s.filtADT.split, function(x) x$capID))) %>%
+  ggplot(aes(x = capID, fill = label)) +
+    geom_bar(position = "fill") +
+    theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+### Table of counts
+```{r}
+#table(s.split$Monaco.main.pruned.labels, s.split$capID)
+table(unlist(sapply(s.filtADT.split, function(x) x$BP.main.pruned.labels)), unlist(sapply(s.filtADT.split, function(x) x$capID))) %>%
+   knitr::kable()
+```
+
+### UMAPs
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "BP.main.pruned.labels", label.size=3) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2) %>%
+  annotate_figure(top = ggpubr::text_grob("SingleR with the Blueprint Encode reference", face = "bold", size = 14))
+```
+
+
+# 4 - ADT Processing {.tabset}
+
+# 4.1 - Quality control metrics in ADT-based UMAP space {.tabset}
+
+<!-- The antibody expression data looks mostly good, except for the same two samples that failed for RNA, `RFg17` and `RJc17`. -->
+
+## seurat_clusters (based on ADT NN)
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", group.by = "ADT_snn_res.0.2",
+               label.size=4, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2)
+```
+
+## nCount_ADT
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "nCount_ADT",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2)
+```
+
+## nFeature_ADT
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "nFeature_ADT",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol =5, nrow = 6)
+```
+
+## log10ADTPerUMI
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "log10ADTPerUMI",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2)
+```
+
+## Blueprint labels
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=4}
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", group.by = "BP.main.pruned.labels",
+               label.size=2, plot_smaller = T, legend = F) %>%
+  ggarrange(plotlist = ., ncol = 4, nrow = 2)
+```
+
+# {.unlisted .unnumbered}
+
+## Correspondance of ADT-based natural clusters to ADT expression
+
+Now a quick look at how the ADT expression lines up with the natural ADT clusters.
+
+```{r, fig.width=15, fig.height=10}
+lapply(
+  seq_along(s.filtADT.split),
+  function(i, x=s.filtADT.split) {
+    heatmapClusterADT(s.filtADT.split[[i]], title = names(s.filtADT.split)[[i]])
+}) %>%
+  ggarrange(plotlist=., ncol=4, nrow=2) %>%
+  annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
+
+

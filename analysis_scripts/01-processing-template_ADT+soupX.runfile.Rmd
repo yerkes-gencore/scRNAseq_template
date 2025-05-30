@@ -1,0 +1,1200 @@
+---
+title: "scRNAseq processing template"
+author: "ENPRC Genomics Core"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Libraries
+
+```{r setup, include=FALSE}
+library(Seurat)
+library(scDblFinder)
+library(tidyverse)
+library(here)
+library(gencoreSC)
+library(celldex)
+library(SingleR)
+library(ggpubr)
+library(ggh4x)
+library(BiocParallel)
+knitr::opts_chunk$set(echo=FALSE, warning=TRUE, message=TRUE,
+                      fig.width = 8, fig.height = 6,
+                      cache=FALSE, cache.lazy = FALSE,
+                      fig.align = 'center')#, include=FALSE)
+
+# Set the max size of the future globals 
+# This is needed for memory heavy operations
+# options(future.globals.maxSize = 1000 * 1024^2) # 1000 MB
+```
+
+<!-- Change this before modifying anything else! This controls where you save rdss and report names. -->
+<!-- This is helpful if you need to re-run this script later or you want to compare across two workflows (i.e. with vs. without soupX) -->
+
+# 0 - Setup
+
+## 0.1 - Report metadata
+
+```{r}
+## Report metadata
+project_name <- "p24000_template"
+report_number <- "01-ADT"
+report_author <- "Micah Fletcher"
+report_title_root <- "processing"
+report_rds_dir <- paste0("saved_rds/report-", report_number)
+
+## Save rds here:
+dir.create(here(report_rds_dir))
+
+## Get formatted date for adding to rds names
+getDate <- function() {
+  format(Sys.Date(), "%Y%m%d")
+}
+```
+
+
+```{}
+This script is intended to perform single-cell dataset processing prior
+to downstream analysis. This includes removing low quality cells, removing doublets,
+examining ambient RNA contamination, checking cell-cycle effects, demultiplexing
+hashed data, normalizing ADT data, and mapping reference annotations. Ideally,
+the product of this script is a single Seurat object (either merged or integrated)
+that is ready to use for 'analysis' such as differential gene expression,
+cluster labeling, etc.
+
+The workflow in this script relies heavily on the gencoreSC package (see
+https://github.com/yerkes-gencore/gencoreSC for more information). 
+```
+
+## 0.2 - Load configuration
+
+```{r}
+samplesheet <- read.table(here('config/samplesheet-template_ADT.txt'), header=TRUE)
+config <- yaml::yaml.load_file(here("config/config-template_ADT.yml"))
+```
+
+## 0.3 - Load cell annotation reference dataset
+
+```{r}
+ref <- celldex::BlueprintEncodeData() # which reference to use for preliminary reference mapping
+ref.labels <- ref$label.main # which column of the reference dataset to use in SingleR
+meta.prefix = "BP.main" # root of the metadata column names added to Seurat obj by SingleR wrapper function
+de.method = "classic" # use classic for references derived from bulk data, 'wilcox' for refs based on sc data
+```
+
+## 0.4 - Prepare samplesheet
+
+The format of the samplesheet or sample manifest will vary a lot from project to project and you will probably need to manually edit whatever the client has sent the core.
+```{r}
+sample_metadata <- read_csv(here("notes/sample_metadata-template_ADT.csv"), show_col_types = FALSE) %>%
+  select(animalID = "ANIMAL CODE", group = "GROUP", challenge = "CHALLENGE PEPTIDE", hash = "HASH TAG") %>%
+  mutate(animalID = str_remove(string = animalID, pattern = "\\sR$"),
+         animalID = str_remove(string = animalID, pattern = "\\s*$"),
+         group = str_replace(string = group, pattern = "-| ", replacement = "."),
+         challenge = ifelse(challenge == "no challenge", "none", challenge),
+         label = str_extract(animalID, pattern = "^...") %>% toupper(),
+         hash = paste0("Hash", hash, "Human-C025", hash, "-TotalSeqC"))
+
+# so many typos! D:
+typos <- c("RJC" = "RSC", "RFG" = "RFA", "RSO" = "RS0", "REI" = "RET", "RFN" = "RFM")
+
+typos_tbl <- tibble(correct = names(typos), typo = typos)
+
+samplesheet_metadata <- samplesheet %>%
+  mutate(FAIL = ifelse(str_detect(Label, "FAIL"), TRUE, FALSE),
+         Label_simple = str_remove(Label, "\\.FAIL"),
+         Label_simple = str_replace(Label_simple, "13D.132", "13D132")) %>%
+  separate(Label_simple, into = c("lab1", "lab2"), sep = "\\.", remove = FALSE) %>%
+  pivot_longer(cols = c("lab1", "lab2"), names_to = "labelInd", values_to = "label") %>%
+  mutate(label = str_extract(label, pattern = "^...") %>% toupper()) %>%
+  left_join(typos_tbl, by = c("label" = "typo")) %>%
+  mutate(label = ifelse(!is.na(correct), correct, label)) %>%
+  left_join(sample_metadata, by = "label") %>%
+  select(-c(labelInd, label, correct)) %>%
+  # make sure not to combine failed and ok capture
+  mutate(animalID = ifelse(FAIL, paste0(animalID, ".FAIL"), animalID)) %>%
+  group_by(Label)
+
+```
+
+
+## 0.5 - Custom functions
+
+Move these to gencoreSC when they are mature and flexible
+
+```{r}
+## Keeping track of cell counts and gene counts throughout the processing workflow
+init_qc_receipts_tbl <- function(objs) {
+  qc_receipts_tbl <- tibble(capID = rep(names(objs), 2),
+                            metric = c(rep("nGene", length(objs)),
+                                       rep("nCell", length(objs))))
+  return(qc_receipts_tbl)
+}
+
+new_qc_receipt <- function(qc_receipts_tbl, objs) {
+  # Add a column to the table
+  new_receipt <- lapply(objs, dim) %>%
+    as_tibble() %>%
+    mutate(metric = c("nCell", "nGene")) %>%
+    pivot_longer(cols = !metric, names_to = "capID", values_to = "new_receipt") %>%
+    right_join(qc_receipts_tbl, by = c("capID", "metric")) %>%
+    pull(new_receipt)
+  return(new_receipt)
+}
+
+# Usage:
+# qc_receipts_tbl <- init_qc_receipts_tbl(objs_filt)
+# qc_receipts_tbl$doublet_finder <- qc_receipts_tbl %>% new_qc_receipt(objs_filt)
+
+
+## Find files required for SoupX
+findSoupXFiles <- function(base_path,
+                           filtered_mat_pattern = 'filtered_feature_bc_matrix.h5$',
+                           unfiltered_mat_pattern = 'raw_feature_bc_matrix.h5$',
+                           clusters_pattern = 'clustering'){
+  filtered_mat_path <- dir(file.path(base_path, 'outs'),
+                           recursive = TRUE, pattern = filtered_mat_pattern,
+                           include.dirs = TRUE, full.names = TRUE)
+
+  unfiltered_mat_path <- dir(file.path(base_path, 'outs'),
+                             recursive = TRUE, pattern = unfiltered_mat_pattern,
+                             include.dirs = TRUE, full.names = TRUE)
+
+  clusters_base_dir <- dir(file.path(base_path, 'outs'),
+                                 recursive = TRUE, pattern = clusters_pattern,
+                                 include.dirs = TRUE, full.names = TRUE)
+  if (dir.exists(paste0(clusters_base_dir, "/graphclust"))) {
+    clusters_path <- file.path(clusters_base_dir, "/graphclust/clusters.csv")
+  } else if (dir.exists(paste0(clusters_base_dir, "/gene_expression_graphclust"))) {
+    clusters_path <- file.path(clusters_base_dir, "/gene_expression_graphclust/clusters.csv")
+  } else {
+    errorCondition(paste0("Could not find cluster.csv file in ", clusters_base_dir, "/graphclust/ or gene_expression_graphclust/"))
+  }
+
+  return(list(unfiltered_mat_path = unfiltered_mat_path,
+              filtered_mat_path = filtered_mat_path,
+              clusters_path = clusters_path))
+}
+
+## Load cellranger counts matrices
+readCounts10x <- function (capID, filepath, min.cells = 0, min.features = 0, strip.suffix = FALSE, format = "tsv", cr_method="multi") 
+{
+  # Read in counts
+  if (format == "tsv") {
+      counts_in <- Seurat::Read10X(data.dir = filepath)
+  }
+  else if (format == "h5") {
+      counts_in <- Seurat::Read10X_h5(filepath, use.names = TRUE, 
+          unique.features = TRUE)
+  }
+  else {
+      errorCondition("Must specify whether input format is 'tsv' or 'h5'")
+  }
+  
+  # Add capID to front of cell barcode to prevent collisions when merging across clusters
+  if (cr_method == "multi") {
+    # perform on list of assays
+    counts_in <- lapply(counts_in, function(x) {
+      x@Dimnames[[2]] <- paste0(capID, "_", x@Dimnames[[2]])
+      return(x)
+    })
+  } else if (cr_method == "count") {
+    #perform on single assay
+    counts_in@Dimnames[[2]] <- paste0(capID, "_", counts_in@Dimnames[[2]])
+  } else {
+    errorCondition("Must specify whether input format is 'multi' or 'count'")
+  }
+
+  # Get gene expression counts; counts_in would be list if multimodal
+  if ("Gene Expression" %in% names(counts_in)) {
+    gex_counts <- counts_in$`Gene Expression`
+  } else {
+    gex_counts <- counts_in
+  }
+  
+  # Create seurat object from gene expression counts
+  if (rlang::is_installed("Seurat (>= 5.0.1)")) {
+    obj <- Seurat::CreateSeuratObject(
+      gex_counts, project = capID, min.cells = min.cells, min.features = min.features)
+  } else {
+    obj <- Seurat::CreateSeuratObject(
+      gex_counts, project = capID, min.cells = min.cells, min.features = min.features, 
+        strip.suffix = strip.suffix)
+  }
+  
+  # Add counts from other assays, if available  
+  if (!is.null(names(counts_in))) {
+    for (assay_name in names(counts_in)) {
+        if (assay_name != "Gene Expression") {
+            assay_tag <- ifelse(assay_name == "Antibody Capture", 
+              "ADT", ifelse(assay_name == "Peaks", "ATAC", 
+                assay_name))
+            obj@assays[[assay_tag]] <- SeuratObject::CreateAssay5Object(counts = counts_in[[assay_name]])
+        }
+    }
+  }
+  
+  show(obj)
+  return(obj)
+}
+
+## Filter cells with low gene counts and genes with low cell counts
+filterLowGenes <- function (obj, min.cells, min.features = 0, assay = "RNA", calculate_only = TRUE) {
+  if (rlang::is_installed("Seurat (>= 5.0.1)")) {
+    obj_counts <- obj[[assay]]$counts
+  } else {
+    obj_counts <- obj[[assay]]@counts
+  }
+  
+  remove_genes <- Matrix::rowSums(obj_counts > 0) < min.cells
+  message(paste0(obj@project.name, ": ", sum(remove_genes), " genes found in fewer than ", min.cells, " cells"))
+  
+  if (!calculate_only) {
+    message("Creating new seurat object with genes with counts < min.cells removed.")
+    # Save other assays, because subset method removes them for some reason
+    assay_names <- names(obj@assays)
+    assay_counts <- lapply(obj@assays, function(ass) {
+      ass$counts
+    })
+    # Filter out genes with counts < min.cells
+    keep_genes <- rownames(obj)[Matrix::rowSums(obj_counts > 0) >= min.cells]
+    # Create seurat object from gene expression counts
+    capID <-  as.character(unique(obj$orig.ident))
+    if (rlang::is_installed("Seurat (>= 5.0.1)")) {
+      obj <- Seurat::CreateSeuratObject(
+        assay_counts[["RNA"]], project = capID, min.cells = min.cells, min.features = min.features)
+    } else {
+      obj <- Seurat::CreateSeuratObject(
+        assay_counts[["RNA"]], project = capID, min.cells = min.cells, min.features = min.features, 
+          strip.suffix = strip.suffix)
+    }
+  # Add back the non-RNA assays
+    for (ass in grep("RNA", assay_names, invert = T, value = T)) {
+      obj[[ass]] <- SeuratObject::CreateAssay5Object(counts = assay_counts[[ass]])
+    }
+  }
+  return(obj)
+}
+
+## Demultiplex data using HTOs
+demuxAntibodyData <- function(obj,
+                              labels,
+                              assay = 'Antibody.Capture',
+                              normalization.method = 'CLR',
+                              ...){
+  hto_feature_list <- rownames(obj[[assay]]$counts) %in% names(labels)
+  hto_data <- obj[[assay]]$counts[hto_feature_list,]
+  adt_data <- obj[[assay]]$counts[!hto_feature_list,]
+  rownames(hto_data) <- plyr::mapvalues(rownames(hto_data),
+                                        from=names(labels),
+                                        to=labels)
+  obj[['HTO']] <- SeuratObject::CreateAssay5Object(counts = hto_data)
+  if (nrow(adt_data) > 0){
+    print('Pruning remaining cite-seq assay')
+    obj[[assay]] <- SeuratObject::CreateAssay5Object(counts = adt_data)
+  } else {
+    obj[[assay]] <- NULL
+    print('Removing ADT assay as no other features are left')
+  }
+  obj <- Seurat::NormalizeData(obj,
+                               assay='HTO',
+                               normalization.method = normalization.method)
+  obj <- Seurat::HTODemux(obj, assay='HTO', ...)
+  return(obj)
+}
+
+## Run scDblFinder
+run_scDblFinder <- function(obj,
+                            cores=1, 
+                            knownDoublets=NULL,
+                            knownUse=NULL,
+                            nfeatures = 2000,
+                            ...){
+  if (cores > 1){
+    bp <- BiocParallel::MulticoreParam(cores, RNGseed=45)
+  } else {
+    bp <- BiocParallel::SerialParam()
+  }
+  
+  if (!is.null(knownDoublets)){
+    if (is.null(knownUse)){
+      errorCondition('Specify how you want known doublets to be used with "knownUse"')
+    }
+  }
+  obj.sce <- Seurat::as.SingleCellExperiment(obj)
+  obj.sce <- scDblFinder::scDblFinder(obj.sce, 
+                                      knownDoublets = knownDoublets,
+                                      knownUse = knownUse,
+                                      BPPARAM=bp,
+                                      nfeatures = nfeatures, ...)
+  obj$scDblFinder.score <- obj.sce$scDblFinder.score
+  obj$scDblFinder.class <- obj.sce$scDblFinder.class
+  obj
+}
+
+## Run SingleR
+runSingleR <- function (obj.seurat, ref, labels, de.method = "classic", meta.prefix = "singleR", 
+    num.threads = BiocParallel::bpnworkers(BiocParallel::MulticoreParam()), 
+    ...) 
+{
+  ## If input is a seurat obj, convert to single cell experiment
+  sce <- SingleCellExperiment(list(counts=obj.seurat@assays$RNA@layers$counts),
+                              metadata=obj.seurat@meta.data) %>%
+    scater::logNormCounts()
+  
+  rownames(sce) <- rownames(obj.seurat@assays$RNA)
+  colnames(sce) <- colnames(obj.seurat@assays$RNA)
+  
+  sce <- sce %>% SummarizedExperiment::assays()
+  
+  # singleR.out <- obj.seurat %>% Seurat::as.SingleCellExperiment(assay = "RNA") %>% 
+  #       scater::logNormCounts() %>% SummarizedExperiment::assays()
+  
+  singleR.out <- SingleR::SingleR(test = sce$logcounts, 
+      ref = ref, labels = labels, de.method = de.method, num.threads = num.threads)
+  
+  obj.seurat@meta.data[[paste0(meta.prefix, ".labels")]] <- forcats::fct(singleR.out$labels, levels = sort(unique(singleR.out$labels)))
+  obj.seurat@meta.data[[paste0(meta.prefix, ".pruned.labels")]] <- forcats::fct(singleR.out$pruned.labels, levels = sort(unique(singleR.out$pruned.labels)))
+  obj.seurat@meta.data[[paste0(meta.prefix, ".delta.next")]] <- singleR.out$delta.next
+    return(list(obj.seurat, singleR.out))
+}
+
+## Custom plotting unifying the syntax of FeaturePlot and DimPlot for more concise code
+plotUMAP_split <- function (obj.split, reduction = "umap", group.by = NULL, feature = NULL, 
+    title.prefix = NULL, label.size = 4, plot_smaller = T, 
+    legend = F, label = F, repel = F, cols = c("lightgrey", "blue"),
+    ...) 
+{
+  if (!is.null(group.by) & is.null(feature)) {
+    # Get joint levels across all objs in list
+    grp_lvls <- obj.split %>% 
+      lapply(function(x) unique(x[[group.by]])) %>%
+      unlist() %>% unname() %>% unique() %>% sort()
+    # Assign colors to each level
+    hues <- scales::hue_pal()(length(grp_lvls))
+    lvl_hues <- setNames(grp_lvls, nm = hues)
+    # Plot DimPlot using custom hue palette
+    umaps <- obj.split %>%
+      lapply(function(x) {
+        hues2use <- names(lvl_hues)[lvl_hues %in% unique(x@meta.data[[group.by]])]
+        DimPlot(x, reduction = reduction, group.by = group.by, label = label, 
+                repel = repel, label.size = label.size, cols = hues2use)
+      })
+  } else if (is.null(group.by) & !is.null(feature)) {
+    # Get joint range
+    joint_range <- c()
+    joint_range[1] <- lapply(obj.split, function(x) min(x[[feature]])) %>% unlist() %>% min()
+    joint_range[2] <- lapply(obj.split, function(x) max(x[[feature]])) %>% unlist() %>% max()
+    # Plot FeaturePlot using joint range
+    umaps <- obj.split %>%
+      lapply(function(x) {
+        FeaturePlot(x, reduction = reduction, features = feature, label = label, 
+                repel = repel, label.size = label.size, 
+                cols = cols,
+                min.cutoff = joint_range[1], max.cutoff = joint_range[2])
+      })
+  }
+  # Additional formatting
+  Sample_Names <- names(obj.split)
+  umaps <- lapply(names(umaps), function(Sample_Name) {
+    umap <- umaps[[Sample_Name]] + 
+    theme(aspect.ratio = 1, 
+          plot.title = element_text(size = 8), 
+          axis.title = element_text(size = 8), 
+          axis.text = element_text(size = 8)) + 
+    ggtitle(paste(title.prefix, Sample_Name))
+    if (plot_smaller) {
+      umap <- plot_smaller(umap, discrete = is.null(feature), ...)
+    }
+    if (!legend) {
+        umap <- umap+ theme(legend.position = "none")
+    }
+    return(umap)
+  })
+  names(umaps) <- Sample_Names
+  return(umaps)
+}
+
+## Plot heatmap of ADT expression across ADT-based clusters
+heatmapClusterADT <- function(x,
+                              title = x@project.name,
+                              silent = TRUE,
+                              group = "seurat_clusters") {
+  prots <- x@assays$ADT$counts %>% rownames()
+  adt_plot <- cbind(x@meta.data, as.data.frame(t(x@assays$ADT$data))) %>%
+    dplyr::group_by(.data[[group]]) %>%
+    dplyr::summarize_at(.vars = prots, .funs = median) %>%
+    tibble::remove_rownames() %>%
+    tibble::column_to_rownames(var = group)
+
+  pheatmap::pheatmap(t(adt_plot),
+                     color = viridis::viridis(25, option = "B"),
+                     fonstize_row = 8, border_color = NA, silent = silent,
+                     legend = FALSE, treeheight_row = 10, treeheight_col = 10,
+                     fontsize_row = 4, fontsize_col = 6, main = title) %>%
+    ggplotify::as.ggplot()
+}
+```
+
+
+# 1 - SoupX
+
+Estimate contamination fraction arising from ambient RNA. We generally always estimate the contamination and typically only adjust counts if at least one capture has high contamination (e.g. rho > 10%).
+
+```{r}
+## Finding files for SoupX, could also manually specify
+soupx_files <- lapply(samplesheet$FileID, function(x){
+  findSoupXFiles(file.path(config$rootDir, config$alignmentDir, x))
+})
+names(soupx_files) <- samplesheet$Label
+# Running soupx takes a while
+sc <- lapply(soupx_files, function(x){
+  tryCatch(
+    {
+      runSoupX(x[['unfiltered_mat_path']], x[['filtered_mat_path']], x[['clusters_path']])
+    },
+    error=function(cond){
+      message("Error during runSoupX, returning NA and continuing.")
+    }
+  )
+})
+
+write_rds(sc, here(report_rds_dir, 'soupx_results.rds'))
+## always a good idea to reload the saved object to check that it saved ok
+# sc <- read_rds(here(report_rds_dir, 'soupx_results.rds'))
+```
+
+```{r}
+extractSoupXContamEst <- function(sc){
+  rho <- sc$fit$rhoEst
+  rho_low <- sc$fit$rhoFWHM[1]
+  rho_high <- sc$fit$rhoFWHM[2]
+  return(list(rho_low = rho_low, rho = rho, rho_high = rho_high))
+}
+soupx_results <- data.table::rbindlist(lapply(sc, extractSoupXContamEst), idcol = 'Sample')
+soupx_results
+```
+
+```{r}
+## The replay plot function bugs with html_notebook,
+## will only show in viewer window if you execute it from console
+## https://github.com/rstudio/rstudio/issues/5648
+## Pulling individual plots to examine possible problem samples
+# sc$RRk19$plot
+# sc$RPs20$plot
+# sc$RJu20$plot
+# sc$RCn20$plot
+# sc$RTs20$plot
+# sc$RHy19$plot
+# sc$RTy20$plot
+# sc$RUe21$plot
+# sc$RDd21$plot
+
+```
+
+```{r}
+## See highly affected genes
+capIDs <- names(sc)
+for (capID in capIDs) {
+  plotSoupXGeneAdjustments(sc[[capID]], hide_ensembl = TRUE, ens_pattern = '^ENS')
+}
+```
+
+
+# 2 - GEX processing
+
+## 2.1 - Load data
+
+```{}
+depending on the results of soupX, you may decide to use the corrected counts
+instead of the raw counts. In that case you will have to adjust this
+workflow or overwrite the produced Seurat objects' data slots
+```
+
+```{r, include=FALSE}
+paths_to_dirs <- file.path(config$rootDir,
+                         config$alignmentDir, 
+                         samplesheet$FileID,
+                         'outs/filtered_feature_bc_matrix.h5')
+
+s.split.unfilt <- mapply(readCounts10x,
+                         capID = samplesheet$Label,
+                         filepath = paths_to_dirs,
+                         format = "h5", strip.suffix = FALSE, USE.NAMES = TRUE)
+
+# Add capID to front of cell barcode to prevent collisions when merging across clusters
+for (capID in names(sc)) {
+  sc[[capID]]$adjusted_counts@Dimnames[[2]] <- paste0(capID, "_", sc[[capID]]$adjusted_counts@Dimnames[[2]])
+}
+
+## Initialize a flag to track if all columns are present
+all_present <- TRUE
+
+## Check for missing columns in each capID
+for (capID in names(sc)) {
+  missing_cols <- setdiff(colnames(s.split.unfilt[[capID]]), colnames(sc[[capID]]$adjusted_counts))
+  if (length(missing_cols) > 0) {
+    warning(paste0("The following columns are missing in adjusted_counts for ", capID, ": ", paste(missing_cols, collapse = ", ")))
+    all_present <- FALSE  # Set flag to FALSE if any missing columns are found
+  } else {
+    message(paste0("All columns present for ", capID))
+  }
+}
+
+# Replace cellranger filtered counts with soupx adjusted counts of filtered cells
+if (all_present) {
+  ## Execute lapply only if all columns are present in all capIDs
+  message("All columns are present. Replacing cellranger filtered counts with soupx adjusted counts.")
+  s.split.unfilt <- lapply(names(s.split.unfilt), function(capID) {
+    s.split.unfilt[[capID]]@assays$RNA@layers$counts <- 
+      sc[[capID]]$adjusted_counts[, colnames(s.split.unfilt[[capID]])]
+    return(s.split.unfilt[[capID]])
+  })
+  names(s.split.unfilt) <- names(sc)
+} else {
+  # if all columns are not present, stop the script
+  stop("Not all columns are present. The replacement was not executed.")
+}
+
+write_rds(s.split.unfilt, here(report_rds_dir, "raw_captures.rds"))
+
+## This keeps track of dropped cells etc. through processing steps
+qc_receipts_tbl <- init_qc_receipts_tbl(s.split.unfilt)
+qc_receipts_tbl$preprocessing <- qc_receipts_tbl %>% new_qc_receipt(s.split.unfilt)
+```
+
+## 2.2 - Removing low count genes
+
+```{}
+Rather than using the min.cells argument of readCounts10x, I prefer to separate
+this step out. This has the benefit of 1) allowing you to slot in the soupX
+adjusted counts easily and 2) more explicitly seeing the impact of this step
+```
+
+```{r}
+## only genes appearing in at least `min.cells` cells will be kept
+s.split.unfilt <- lapply(s.split.unfilt, filterLowGenes, min.cells = 10, assay = 'RNA', calculate_only = FALSE)
+qc_receipts_tbl$remove_low_genes <- qc_receipts_tbl %>% new_qc_receipt(s.split.unfilt)
+```
+
+## 2.3 - Removing low count cells
+
+```{}
+This approach tests filtering cells based on cutoffs, outlier detection, or
+both. Nothing is done to the data initially, so you can decide which filtering
+regime to use. 
+```
+
+```{r}
+s.split.unfilt <- lapply(s.split.unfilt, function(x) {
+  addQCmetrics(x, mito.pattern = "^MT", ribo.pattern = "^RP[SL]")
+})
+```
+
+```{r}
+## Define your thresholds. Helper function generate_cutoffs will 
+## initialize a list using outlier detection
+cutoffs <- lapply(s.split.unfilt, generate_capture_QC_cutoffs)
+
+## adjust based on first pass
+cutoffs_adjusted <- cutoffs
+cutoffs_adjusted <- lapply(cutoffs_adjusted, function(x) {
+  x$nUMI.min <- 1000 
+  return(x)
+  })
+cutoffs_adjusted <- lapply(cutoffs_adjusted, function(x) {
+  x$nGene.min <- 700 
+  return(x)
+  })
+```
+
+```{r, include=FALSE}
+## this applies the cutoffs to your objects, and stores whether a cell 
+## is filtered or not in the 'outliers' column
+s.split.unfilt <- mapply(addQCfilter, s.split.unfilt, filterName = 'outliers', cutoffs)
+s.split.unfilt <- mapply(addQCfilter, s.split.unfilt, filterName = 'adjusted', cutoffs_adjusted)
+```
+
+```{r, message=TRUE, warning=FALSE, fig.width=18, fig.height=15}
+## Generate dashboard plots of filtering regimes
+cell_filtering_plots <- list()
+## if you added multiple filters, say one with default settings and one with
+## modified thresholds, you can plot all of them here. Specifying 'input'
+## shows the unfiltered cells in a separate dashboard
+for (filtName in c('input', 'outliers', 'adjusted')) {
+  cell_filtering_plots[[filtName]] <- plotQCRidgesJoint(s.split.unfilt, 
+                                              filtName = filtName,
+                                              title = filtName, 
+                                              split_by = "capID", 
+                                              color_by = "riboRatio",
+                                              cutoffs = cutoffs,
+                                              facet_colors = TRUE)
+}
+cell_filtering_plots
+```
+
+```{r}
+## choose a boolean metadata column to filter on
+s.split <- lapply(s.split.unfilt, subset, subset = adjusted)
+#rm(s.split.unfilt)
+qc_receipts_tbl$qc_filtering <- qc_receipts_tbl %>% new_qc_receipt(s.split)
+```
+
+## 2.4 - Hash demultiplexing (but don't split by hash yet)
+
+Run hash demultiplexing and save hashID as metadata
+
+```{}
+Not needed for all studies
+```
+
+
+```{r}
+## Labels need to be a named list
+HTO_labels_nested <- samplesheet_metadata %>%
+  select(Label, animalID, hash) %>%
+  group_split(.by = Label) %>%
+  lapply(., function(x) {
+    x %>%
+      select(animalID, hash) %>%
+      pivot_wider(names_from = hash, values_from = animalID) %>%
+      unlist()
+    })
+
+names(HTO_labels_nested) <- samplesheet_metadata %>% group_keys() %>% pull(Label)
+```
+
+```{r}
+capIDs <- names(s.split)
+s.split <- lapply(capIDs, function(x) {
+  s.split <- demuxAntibodyData(obj = s.split[[x]], labels = HTO_labels_nested[[x]], assay = 'ADT')
+  s.split$HTO_Doublet <- s.split$hash.ID == "Doublet"
+  return(s.split)
+})
+names(s.split) <- capIDs
+```
+
+```{r}
+HTOdoublet_counts <- lapply(s.split, function(x) {
+  x@meta.data %>%
+    summarize(nTotal = n(),
+              nDoublet = sum(hash.ID == "Doublet"),
+              nNegative = sum(hash.ID == "Negative"))
+}) %>% bind_rows(.id = "capID")
+
+HTOdoublet_counts
+```
+
+<!-- ## Doublet finding -->
+
+<!-- ```{} -->
+<!-- We do however run doublet removal as a default. If you have hashed data, -->
+<!-- you can specify the ground_truth argument of runDoubletFinder. -->
+
+<!-- Or maybe it shouldn't be the default? And you should map the data on the cluster -->
+<!-- level umaps to make a decision? TBD -->
+<!-- ``` -->
+
+
+<!-- ```{r, include=FALSE} -->
+<!-- s.split <- lapply(s.split, NormFindVarFeatScaleData, norm_method = 'logNorm') -->
+<!-- s.split <- lapply(s.split, RunPCA) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- s.split <- lapply(s.split, runDoubletFinder,  -->
+<!--                     PCs = 30, -->
+<!--                     sct = FALSE, -->
+<!--                     cores = 10) ## adjust for your machine -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- doubletfinder_results <- data.table::rbindlist( -->
+<!--   lapply(s.split, function(x) { -->
+<!--     as.list(table(x$DF_classifications)) -->
+<!--   }), idcol = 'Sample') -->
+<!-- doubletfinder_results %>% -->
+<!--   knitr::kable() -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- write_rds(s.split, here('saved_rds/s.split.rds')) -->
+<!-- s.split <- read_rds(here('saved_rds/s.split.rds')) -->
+<!-- ``` -->
+
+## 2.5 - Doublet detection scDblFinder
+
+```{r, eval = FALSE}
+## Doublet detection requires super low-count cells to be removed. If you get
+## errors saying 'Size factors should be positive', try removing low count cells .The
+## vignette for scDblFinder suggests removing cells with less than 200 reads.
+# objs <- lapply(objs, subset, subset = nCount_RNA > 200)
+```
+
+```{r}
+s.split <- lapply(s.split, run_scDblFinder, cores = 16)
+```
+
+```{r}
+scDbl_counts <- lapply(s.split, function(x) {
+  x@meta.data %>%
+    summarize(nTotal = n(),
+              nDoublet = sum(scDblFinder.class == "doublet"),
+              nSinglet = sum(scDblFinder.class == "singlet"))
+}) %>% bind_rows(.id = "capID")
+
+scDbl_counts
+```
+
+## 2.6 - Remove doublets and split object by hash
+
+###  2.6.1 - Remove hash demultiplexing negatives
+```{r}
+s.split <- lapply(s.split, subset, subset = HTO_classification != "Negative")
+
+qc_receipts_tbl$demux_filtering <- qc_receipts_tbl %>% new_qc_receipt(s.split)
+```
+
+### 2.6.2 - Count HTOdemux and scDblFinder doublets
+
+There is definitely a more efficent way of doing this.
+```{r}
+s.tmp <- lapply(s.split, subset, subset = hash.ID != "Doublet")
+s.tmp <- lapply(s.split, subset, subset = scDblFinder.class != "doublet")
+
+qc_receipts_tbl$doublet_removal <- qc_receipts_tbl %>% new_qc_receipt(s.tmp)
+```
+
+### 2.6.3 - Finalize gene and cell count summary
+
+```{r}
+qc_filtering_summary <- qc_receipts_tbl %>%
+  filter(metric == "nCell") %>%
+  mutate(n_low_qual_cells = preprocessing - qc_filtering,
+         n_hashing_failed = qc_filtering - demux_filtering,
+         n_doublets = demux_filtering - doublet_removal,
+         n_good_cells = doublet_removal) %>%
+  dplyr::select(capID, n_total = preprocessing, n_low_qual_cells, n_hashing_failed, n_doublets, n_good_cells)
+
+(qc_filtering_results_plot <- qc_filtering_summary %>%
+  select(capID, -n_total, low_qual_cells = n_low_qual_cells, hashing_failed = n_hashing_failed, doublets = n_doublets, good_cells = n_good_cells) %>%
+  pivot_longer(cols = !capID, names_to = "filter_criterion", values_to = "nCells") %>%
+  mutate(filter_criterion = factor(filter_criterion, levels = c('low_qual_cells', 'hashing_failed', 'doublets', 'good_cells'))) %>%
+  ggplot(aes(x = capID,
+             y = nCells,
+             fill = filter_criterion)) +
+    geom_col() +
+    theme_classic() +
+    labs(x = 'Sample', y = 'Cell count', fill = NULL) +
+    scale_fill_manual(values = c('low_qual_cells' = 'red',
+                                 'hashing_failed' = 'orange',
+                                 'doublets' = 'yellow',
+                                 'good_cells' = 'green')) +
+  theme(axis.text.x = element_text(angle = 90))
+  # scale_y_break(c(12500, 98000), ticklabels = c(98000, 100000)) 
+)
+
+write_rds(qc_filtering_summary, file = here(paste0("saved_rds/report-", report_number), "qc_filtering_summary.rds"))
+```
+
+### 2.6.4 - Remove HTOdemux and scDblFinder doublets and split object by hash
+
+```{r}
+## Merge objects so we can split them by hash
+s.demux <- merge(s.split[[1]], s.split[2:length(s.split)]) %>%
+  JoinLayers()
+
+## Remove hashing doublets and scDblFinder doublets
+s.demux <- subset(s.demux, subset = hash.ID != "Doublet")
+s.demux.noDbl <- subset(s.demux, subset = scDblFinder.class != "doublet")
+
+## Split filtered obj by hash
+s.demux.noDbl <- s.demux.noDbl %>% SplitObject(split.by = "hash.ID")
+
+## Also split the obj with scDblFinder doublets (but no hash doublets) by hash
+s.demux <- s.demux %>% SplitObject(split.by = "hash.ID")
+```
+
+
+## 2.10 - Check cell cycle
+
+```{r, include=FALSE}
+s.demux.noDbl <- lapply(s.demux.noDbl, scoreCC, s.genes = cc.genes$s.genes, g2m.genes = cc.genes$g2m.genes)
+```
+
+```{r, fig.width=30, fig.height=15}
+lapply(s.demux.noDbl, plotPCAs, features = "Phase") %>%
+  unlist(recursive = FALSE) %>%
+  ggarrange(plotlist = .)
+```
+
+```{}
+We don't do any default correction for cell-cycle as it is a per-study consideration.
+But the relevant metadata is stored with the object if you want to regress it out
+downstream.
+```
+
+
+# 3 - ADT Processing
+
+## 3.1 - Determine which ADTs to keep
+
+Often a panel is used for cell ranger alignment than were actually used in library creation. Usually, we know the actual ADT panel ahead of time, and can subset accordingly. Even so, it is useful to plot the counts for all ADTs as a sanity check.
+
+### 3.1.1 - Calculate and plot ADT total counts-per-sample
+
+```{r}
+adt_per_sample_total_counts <- lapply(s.demux.noDbl, function(x) {
+  x@assays$ADT$counts %>% rowSums() %>% as_tibble_row()
+  }) %>%
+  bind_rows(.id = "animalID") %>%
+  pivot_longer(cols = -animalID, values_to = "count", names_to = "ADT") %>%
+  group_by(ADT) %>%
+    mutate(total_count = sum(count)) %>%
+  ungroup() %>%
+  arrange(desc(total_count))
+
+adt_per_sample_total_counts$ADT <- factor(adt_per_sample_total_counts$ADT, 
+                                          levels = unique(adt_per_sample_total_counts$ADT))
+
+adt_per_sample_total_counts %>%
+  ggplot(aes(fill = animalID, x = ADT, y = count)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+
+adt_per_sample_total_counts %>%
+  filter(total_count > 700) %>%
+  ggplot(aes(fill = animalID, x = ADT, y = count)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5))
+```
+
+### 3.1.2 - Compare total counts-per-sample of all ADTs to the actual panel
+
+```{r}
+adt_panel <- c("CD4-SK3-Human-TotalSeq-C-344651",
+               "CD8a-RPA-T8-Human-TotalSeq-C-301071",
+               "CD69-FN50-Human-TotalSeq-C-310951",
+               "HLA-DR-L243-Human-TotalSeq-C-307663",
+               "CD14-M5E2-Human-TotalSeq-C-301859",
+               "CD16-3G8-Human-TotalSeq-C-302065",
+               "CD123-6H6-Human-TotalSeq-C-306045",
+               "CD1c-L161-Human-TotalSeq-C-331547",
+               "CD11c-S-HCL-3-Human-TotalSeq-C-371521",
+               "CD11b-ICRF44-Human-TotalSeq-C-301359")
+
+adts_over_9000 <- adt_per_sample_total_counts %>%
+  filter(total_count > 9000) %>% pull(ADT) %>% unique()
+
+axis.text.x.colors <- ifelse(adts_over_9000 %in% adt_panel, "red", "black")
+
+adt_per_sample_total_counts %>%
+  filter(total_count > 9000) %>%
+  ggplot(aes(fill = animalID, x = ADT, y = count)) +
+  geom_bar(stat = "identity", position = "stack") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5,
+                                   color = axis.text.x.colors))
+```
+
+## 3.2 - Remove unused ADTs
+```{r}
+## Replace ADT data
+s.filtADT <- merge(s.demux.noDbl[[1]], s.demux.noDbl[2:length(s.demux.noDbl)])
+s.filtADT[["RNA"]] <- s.filtADT[["RNA"]] %>% JoinLayers()
+s.filtADT[["ADT"]] <- s.filtADT[["ADT"]] %>% JoinLayers()
+s.filtADT[["HTO"]] <- s.filtADT[["HTO"]] %>% JoinLayers()
+# adts.use <- adt_per_sample_total_counts %>%
+#   filter(total_count > 9000) %>%
+#   pull(ADT) %>% unique()
+adt_counts <- s.filtADT@assays$ADT$counts
+adt_counts.subset <- adt_counts[which(rownames(adt_counts) %in% adts_over_9000), ] # Pull the raw expression matrix from the original Seurat object containing only the genes of interest
+s.filtADT[["ADT"]] <- CreateAssayObject(counts = adt_counts.subset) # Create a new assay with just the genes of interest
+```
+
+# 4 - Preliminary cell annotation
+
+## 4.1 - Automated cell annotation using SingleR
+
+```{}
+Somewhat TBD if this belongs in the processing step, it's long but pretty easy
+to run this way so I'd like to have it done prior to the 'analysis' so that
+object is stable. 
+```
+
+```{r}
+ref <- celldex::BlueprintEncodeData()
+
+c(s.filtADT, singler_out) %<-% runSingleR(
+  obj.seurat = s.filtADT, ref = ref,  labels = ref.labels,
+  meta.prefix = meta.prefix, de.method = de.method)
+```
+
+Split s.filtADT
+```{r}
+s.filtADT.split <- s.filtADT %>% SplitObject(split.by = "hash.ID")
+```
+
+
+Add labels to the object with doublets as well
+```{r}
+s.demux_names <- names(s.demux)
+s.demux <- lapply(s.demux_names, function(cap) {
+  s.demux[[cap]]@meta.data$BP.main.pruned.labels <- NA
+  s.demux[[cap]]@meta.data[colnames(s.filtADT.split[[cap]]),"BP.main.pruned.labels"] <- 
+    s.filtADT.split[[cap]]@meta.data$BP.main.pruned.labels
+  return(s.demux[[cap]])
+})
+names(s.demux) <- s.demux_names
+
+# c(s.filtADT, singler_out) %<-% runSingleR(
+#   obj.seurat = s.filtADT, ref = ref,  labels = ref.labels,
+#   meta.prefix = meta.prefix, de.method = de.method)
+```
+
+
+```{r}
+# write_rds(singler_out, here('saved_rds/singleR_out.rds'))
+# write_rds(s, here('saved_rds/objs_filt_merged.rds'))
+#singler_out <- read_rds(here('saved_rds/singleR_out.rds'))
+```
+
+## 4.2 - Plotting mapping results
+
+```{r}
+plotScoreHeatmap(singler_out, show.pruned = TRUE, fontsize=4, drop_levels = TRUE)
+plotDeltaDistribution(singler_out, ncol = 10, size = 0)
+table(s.filtADT$BP.main.pruned.labels, s.filtADT$capID)
+```
+
+# 5 - Preliminary sample-level clusters and UMAPs
+
+## 5.1 - RNA-based clustering
+
+This is just quick-and-dirty clustering in order to plot UMAPs colored by qc metrics. These will not be carried over into downstream reports.
+
+### 5.1.1 - Before removing doublets
+
+```{r}
+npcs <- 30
+s.demux <- s.demux %>%
+  lapply(., function(x) {
+    x <- x %>%
+      NormFindVarFeatScaleData(norm_method = "logNorm", nfeatures = 2000) %>%
+      RunPCA(npcs = npcs, reduction.name = "pca_rna", verbose=F) %>%
+      RunUMAP(dims = 1:npcs, reduction = "pca_rna", reduction.name = "umap_rna", verbose=F) %>%
+      FindNeighbors(dims = 1:npcs, reduction = "pca_rna", graph.name = c("pca_rna_nn", "pca_rna_snn"), verbose=F) %>%
+      FindClusters(graph.name = "pca_rna_snn", resolution = 0.2, verbose=F) # arbitrary, small resolution as a starting point
+    return(x)
+  })
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+### Doublets
+plotUMAP_split(s.demux, reduction = "umap_rna", group.by = "scDblFinder.class", label.size=3) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+
+### Preliminary labels
+plotUMAP_split(s.demux, reduction = "umap_rna", group.by = "BP.main.pruned.labels", label.size=0, legend=T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("Blueprint/ENCODE reference", face = "bold", size = 14))
+```
+
+### 5.1.2 - After removing doublets
+
+```{r}
+## Split by hash for visualizations
+s.filtADT.split <- SplitObject(s.filtADT, split.by = "hash.ID")
+```
+
+```{r}
+npcs <- 30
+s.filtADT.split <- s.filtADT.split %>%
+  lapply(., function(x) {
+    x <- x %>%
+      NormFindVarFeatScaleData(norm_method = "logNorm", nfeatures = 2000) %>%
+      RunPCA(npcs = npcs, reduction.name = "pca_rna", verbose=F) %>%
+      RunUMAP(dims = 1:npcs, reduction = "pca_rna", reduction.name = "umap_rna", verbose=F) %>%
+      FindNeighbors(dims = 1:npcs, reduction = "pca_rna", graph.name = c("pca_rna_nn", "pca_rna_snn"), verbose=F) %>%
+      FindClusters(graph.name = "pca_rna_snn", resolution = 0.2, verbose=F) # arbitrary, small resolution as a starting point
+    return(x)
+  })
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+### Seurat clusters
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "pca_rna_snn_res.0.2", label.size=3) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("seurat clusters", face = "bold", size = 14))
+
+### Doublets
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "scDblFinder.class", label.size=3) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("doublets", face = "bold", size = 14))
+
+### Cell cycle phase
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "Phase", label.size=3) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("cell cycle phase", face = "bold", size = 14))
+
+### nGene
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "nGene", legend = T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nGene", face = "bold", size = 14))
+
+### nUMI
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "nUMI", legend = T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("nUMI", face = "bold", size = 14))
+
+### log10GenesPerUMI
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "log10GenesPerUMI", legend = T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("log10GenesPerUMI", face = "bold", size = 14))
+
+### mitoRatio
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "mitoRatio", legend = T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("mitoRatio", face = "bold", size = 14))
+
+### riboRatio
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", feature = "riboRatio", legend = T) %>%
+  ggarrange(plotlist = ., common.legend = T, legend = "right") %>%
+  annotate_figure(top = ggpubr::text_grob("riboRatio", face = "bold", size = 14))
+
+### Preliminary labels
+plotUMAP_split(s.filtADT.split, reduction = "umap_rna", group.by = "BP.main.pruned.labels",
+               label.size=2, plot_smaller = T, legend = F) %>%
+  ggarrange(plotlist = ., ncol = 5, nrow = 6)
+```
+
+## 5.2 - ADT-based clustering
+
+```{r}
+# cluster and run umap
+s.filtADT.split <- lapply(s.filtADT.split, function(x) {
+  DefaultAssay(x) <- "ADT"
+  prots <- rownames(x[["ADT"]])
+  VariableFeatures(x) <- rownames(x[["ADT"]])
+  x <- x %>%
+    NormalizeData(assay = "ADT", normalization.method = "CLR", margin = 2) %>%
+    FindNeighbors(dims = NULL, features = prots, k.param = 20, verbose = T) %>%
+    FindClusters(graph.name = "ADT_snn", resolution = 0.2, verbose = T) %>%
+    RunUMAP(features = prots, verbose = T, reduction.name = 'umap_adt')
+})
+```
+
+```{r, message=FALSE, warning=FALSE, fig.width=12, fig.height=18}
+### seurat_clusters (based on ADT NN)
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", group.by = "ADT_snn_res.0.2",
+               label.size = 4, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 5, nrow = 6)
+
+### nCount_ADT
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "nCount_ADT",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 5, nrow = 6)
+
+### nFeature_ADT
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "nFeature_ADT",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 5, nrow = 6)
+
+### log10ADTPerUMI
+plotUMAP_split(s.filtADT.split, reduction = "umap_adt", feature = "log10ADTPerUMI",
+               label.size=0, plot_smaller = T) %>%
+  ggarrange(plotlist = ., ncol = 5, nrow = 6)
+```
+
+## 5.3 - Heatmaps of ADT expression across ADT-based clusters
+
+```{r, fig.width=15, fig.height=10}
+lapply(
+  seq_along(s.filtADT.split),
+  function(i, x=s.filtADT.split) {
+    heatmapClusterADT(s.filtADT.split[[i]], title = names(s.filtADT.split)[[i]],
+                      group = "ADT_snn_res.0.2")
+}) %>%
+  ggarrange(plotlist=., ncol = 4, nrow = 2) %>%
+  annotate_figure(top = ggpubr::text_grob("", face = "bold", size = 14))
+```
+
+# 6 - Add sample metadata to Seurat obj
+
+```{r}
+# Add sample metadata to seurat object
+s.filtADT$animalID <- s.filtADT$hash.ID
+s.filtADT@meta.data <- s.filtADT@meta.data %>%
+  left_join(sample_metadata, by = "animalID")
+s.filtADT$grp_chl <- paste0(s.filtADT$group, s.filtADT$challenge)
+```
+
+
+# 6 - Save objects for report for later
+
+```{r}
+write_csv(sample_metadata, here(paste0("saved_rds/report-", report_number), "sample_metadata.csv"))
+
+write_csv(qc_filtering_summary, here(paste0("saved_rds/report-", report_number), "qc_filtering_summary.csv"))
+write_csv(adt_per_sample_total_counts, here(paste0("saved_rds/report-", report_number), "adt_per_sample_total_counts.csv"))
+write_csv(HTOdoublet_counts, here(paste0("saved_rds/report-", report_number), "HTOdoublet_counts.csv"))
+write_csv(scDbl_counts, here(paste0("saved_rds/report-", report_number), "scDbl_counts.csv"))
+
+write_rds(singler_out, here(paste0("saved_rds/report-", report_number), paste0("singler_out-", getDate(), ".rds")))
+
+write_rds(s.split.unfilt, here(paste0("saved_rds/report-", report_number), paste0("s.split.unfilt-", getDate(), ".rds"))) # for filtering plots
+write_rds(s.demux, here(paste0("saved_rds/report-", report_number), paste0("s.demux-", getDate(), ".rds")))
+write_rds(s.filtADT.split, here(paste0("saved_rds/report-", report_number), paste0("s.filtADT.split-", getDate(), ".rds")))
+write_rds(s.filtADT, here(paste0("saved_rds/report-", report_number), paste0("s.filtADT-", getDate(), ".rds"))) # For downstream processing
+```
+
+# 7 - Render report
+
+## 7.1 - Read and process soupx output from rds
+
+Only necessary if you ran soupx in a previous session
+```{r, eval=FALSE}
+sc <- read_rds(here("saved_rds/report-", report_number, "soupx_results.rds"))
+extractSoupXContamEst <- function(sc){
+  rho <- sc$fit$rhoEst
+  rho_low <- sc$fit$rhoFWHM[1]
+  rho_high <- sc$fit$rhoFWHM[2]
+  return(list(rho_low = rho_low, rho = rho, rho_high = rho_high))
+}
+soupx_results <- data.table::rbindlist(lapply(sc, extractSoupXContamEst), idcol = 'Sample')
+```
+
+## 7.2 - Read the rest of the rdss
+```{r, eval=FALSE}
+sample_metadata <- read_csv(here(paste0("saved_rds/report-", report_number), "sample_metadata.csv"))
+
+qc_filtering_summary <- read_csv(here(paste0("saved_rds/report-", report_number), "qc_filtering_summary.csv"))
+adt_per_sample_total_counts <- read_csv(here(paste0("saved_rds/report-", report_number), "adt_per_sample_total_counts.csv"))
+HTOdoublet_counts <- read_csv(here(paste0("saved_rds/report-", report_number), "HTOdoublet_counts.csv"))
+scDbl_counts <- read_csv(here(paste0("saved_rds/report-", report_number), "scDbl_counts.csv"))
+
+singler_out.main <- read_rds(here(paste0("saved_rds/report-", report_number), "singler_out.main.rds"))
+
+s.split.unfilt <- read_rds(here(paste0("saved_rds/report-", report_number), "s.split.unfilt.rds")) # for filtering plots
+# s.split <- read_rds(here(paste0("saved_rds/report-", report_number), "s.split.rds")) # For split UMAPs and CC phase pcas
+s.demux <- read_rds(here(paste0("saved_rds/report-", report_number), "s.demux.rds"))
+# s.noDb <- read_rds(here(paste0("saved_rds/report-", report_number), "s.noDb.rds"))
+s.filtADT.split <- read_rds(here(paste0("saved_rds/report-", report_number), "s.filtADT.split.rds")) # For downstream processing
+```
+
+## 7.3 - Set filename
+
+```{r}
+report_filename <- paste0(project_name, "-", 
+                          report_number, "-",
+                          report_title_root, "-",
+                          format(Sys.Date(), "%Y%m%d"), ".html")
+```
+
+## 7.4 - Render
+
+```{r}
+rmarkdown::render(input = "01-processing-template_ADT+soupX.format.Rmd", 
+                  output_file = report_filename,
+                  output_dir = here("reports/"))
+```
